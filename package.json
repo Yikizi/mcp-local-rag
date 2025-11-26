@@ -1,7 +1,7 @@
 {
-  "name": "mcp-local-rag",
-  "version": "0.2.1",
-  "description": "Local RAG MCP Server - Easy-to-setup document search with minimal configuration",
+  "name": "@yikizi/mcp-local-rag",
+  "version": "0.3.0",
+  "description": "Local RAG MCP Server - Enhanced with code file support and text snippet ingestion (fork of shinpr/mcp-local-rag)",
   "main": "dist/index.js",
   "bin": {
     "mcp-local-rag": "dist/index.js"
@@ -18,13 +18,15 @@
     "privacy",
     "document-search",
     "semantic-search",
-    "claude-code"
+    "claude-code",
+    "code-search",
+    "text-snippets"
   ],
-  "author": "Shinsuke Kagawa",
+  "author": "Yikizi (fork of Shinsuke Kagawa's mcp-local-rag)",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/shinpr/mcp-local-rag.git"
+    "url": "git+https://github.com/yikizi/mcp-local-rag.git"
   },
   "scripts": {
     "build": "tsc && tsc-alias",
