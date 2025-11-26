@@ -60,6 +60,18 @@ export interface DeleteFileInput {
 }
 
 /**
+ * memorize_text tool input
+ */
+export interface MemorizeTextInput {
+  /** Text content to memorize */
+  text: string
+  /** Optional label/identifier for snippet */
+  label?: string
+  /** Optional language hint (for code snippets) */
+  language?: string
+}
+
+/**
  * ingest_file tool output
  */
 export interface IngestResult {
@@ -140,7 +152,7 @@ export class RAGServer {
         {
           name: 'query_documents',
           description:
-            'Search through previously ingested documents (PDF, DOCX, TXT, MD) using semantic search. Returns relevant passages from documents in the BASE_DIR. Documents must be ingested first using ingest_file.',
+            'Search through previously ingested documents (PDF, DOCX, TXT, MD, code files, text snippets) using semantic search. Returns relevant passages from documents in the BASE_DIR. Documents must be ingested first using ingest_file or memorize_text.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -161,7 +173,7 @@ export class RAGServer {
         {
           name: 'ingest_file',
           description:
-            'Ingest a document file (PDF, DOCX, TXT, MD) into the vector database for semantic search. File path must be an absolute path. Supports re-ingestion to update existing documents.',
+            'Ingest a document or code file (PDF, DOCX, TXT, MD, TypeScript, JavaScript, Python, Java, Go, Rust, C/C++, Ruby, PHP, C#, Shell, SQL) into the vector database for semantic search. File path must be an absolute path. Supports re-ingestion to update existing documents.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -188,6 +200,30 @@ export class RAGServer {
               },
             },
             required: ['filePath'],
+          },
+        },
+        {
+          name: 'memorize_text',
+          description:
+            'Store text snippets directly into the vector database for semantic search. Useful for memorizing code snippets, notes, or any text without file I/O. Stored with label identifier (default: auto-generated timestamp). Can be deleted using delete_file with path "memory://<label>".',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              text: {
+                type: 'string',
+                description: 'Text content to memorize (e.g., code snippet, note, definition)',
+              },
+              label: {
+                type: 'string',
+                description: 'Optional label for snippet (default: "snippet-<timestamp>")',
+              },
+              language: {
+                type: 'string',
+                description:
+                  'Optional language hint for code snippets (e.g., "python", "typescript")',
+              },
+            },
+            required: ['text'],
           },
         },
         {
@@ -221,6 +257,10 @@ export class RAGServer {
           case 'delete_file':
             return await this.handleDeleteFile(
               request.params.arguments as unknown as DeleteFileInput
+            )
+          case 'memorize_text':
+            return await this.handleMemorizeText(
+              request.params.arguments as unknown as MemorizeTextInput
             )
           case 'list_files':
             return await this.handleListFiles()
@@ -287,7 +327,9 @@ export class RAGServer {
 
     try {
       // Parse file
-      const text = await this.parser.parseFile(args.filePath)
+      const parseResult = await this.parser.parseFile(args.filePath)
+      const text = parseResult.text
+      const language = parseResult.language
 
       // Split text into chunks
       const chunks = await this.chunker.chunkText(text)
@@ -344,6 +386,7 @@ export class RAGServer {
             fileName: args.filePath.split('/').pop() || args.filePath,
             fileSize: text.length,
             fileType: args.filePath.split('.').pop() || '',
+            ...(language && { language }),
           },
           timestamp,
         }
@@ -479,6 +522,91 @@ export class RAGServer {
       console.error('Failed to delete file:', errorMessage)
 
       throw new Error(`Failed to delete file: ${errorMessage}`)
+    }
+  }
+
+  /**
+   * memorize_text tool handler
+   *
+   * Stores text snippet directly without file I/O
+   */
+  async handleMemorizeText(
+    args: MemorizeTextInput
+  ): Promise<{ content: [{ type: 'text'; text: string }] }> {
+    try {
+      // Generate label and synthetic path
+      const label = args.label || `snippet-${Date.now()}`
+      const syntheticFilePath = `memory://${label}`
+
+      // Chunk text
+      const chunks = await this.chunker.chunkText(args.text)
+
+      // Generate embeddings
+      const embeddings = await this.embedder.embedBatch(chunks.map((chunk) => chunk.text))
+
+      // Check for existing snippet (re-memorization support)
+      try {
+        const existingFiles = await this.vectorStore.listFiles()
+        const existingFile = existingFiles.find((file) => file.filePath === syntheticFilePath)
+        if (existingFile && existingFile.chunkCount > 0) {
+          await this.vectorStore.deleteChunks(syntheticFilePath)
+          console.log(`Deleted existing snippet: ${syntheticFilePath}`)
+        }
+      } catch (error) {
+        console.warn('Failed to check for existing snippet:', error)
+      }
+
+      // Create vector chunks
+      const timestamp = new Date().toISOString()
+      const vectorChunks: VectorChunk[] = chunks.map((chunk, index) => {
+        const embedding = embeddings[index]
+        if (!embedding) {
+          throw new Error(`Missing embedding for chunk ${index}`)
+        }
+        return {
+          id: randomUUID(),
+          filePath: syntheticFilePath,
+          chunkIndex: chunk.index,
+          text: chunk.text,
+          vector: embedding,
+          metadata: {
+            fileName: label,
+            fileSize: args.text.length,
+            fileType: 'text-snippet',
+            ...(args.language && { language: args.language }),
+          },
+          timestamp,
+        }
+      })
+
+      // Insert into database
+      await this.vectorStore.insertChunks(vectorChunks)
+      console.log(`Inserted ${vectorChunks.length} chunks for snippet: ${syntheticFilePath}`)
+
+      // Return result
+      const result = {
+        filePath: syntheticFilePath,
+        label,
+        chunkCount: chunks.length,
+        timestamp,
+      }
+
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(result, null, 2),
+          },
+        ],
+      }
+    } catch (error) {
+      const errorMessage =
+        process.env['NODE_ENV'] === 'production'
+          ? (error as Error).message
+          : (error as Error).stack || (error as Error).message
+
+      console.error('Failed to memorize text:', errorMessage)
+      throw new Error(`Failed to memorize text: ${errorMessage}`)
     }
   }
 

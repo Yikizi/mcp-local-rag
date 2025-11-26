@@ -11,6 +11,31 @@ import { PDFParse } from 'pdf-parse'
 // ============================================
 
 /**
+ * Supported code file extensions mapped to language names
+ */
+const CODE_EXTENSIONS: Record<string, string> = {
+  '.ts': 'typescript',
+  '.tsx': 'typescript',
+  '.js': 'javascript',
+  '.jsx': 'javascript',
+  '.py': 'python',
+  '.java': 'java',
+  '.go': 'go',
+  '.rs': 'rust',
+  '.c': 'c',
+  '.cpp': 'cpp',
+  '.cc': 'cpp',
+  '.cxx': 'cpp',
+  '.h': 'c',
+  '.hpp': 'cpp',
+  '.rb': 'ruby',
+  '.php': 'php',
+  '.cs': 'csharp',
+  '.sh': 'bash',
+  '.sql': 'sql',
+} as const
+
+/**
  * DocumentParser configuration
  */
 export interface ParserConfig {
@@ -51,18 +76,29 @@ export class FileOperationError extends Error {
 // ============================================
 
 /**
- * Document parser class (PDF/DOCX/TXT/MD support)
+ * Document parser class (PDF/DOCX/TXT/MD + code file support)
  *
  * Responsibilities:
  * - File path validation (path traversal prevention)
  * - File size validation (100MB limit)
- * - Parse 4 formats (PDF/DOCX/TXT/MD)
+ * - Parse 14+ formats (PDF/DOCX/TXT/MD + 10 code file types)
  */
 export class DocumentParser {
   private readonly config: ParserConfig
 
   constructor(config: ParserConfig) {
     this.config = config
+  }
+
+  /**
+   * Detect programming language from file extension
+   *
+   * @param filePath - File path
+   * @returns Language name or 'unknown'
+   */
+  private detectLanguage(filePath: string): string {
+    const ext = extname(filePath).toLowerCase()
+    return CODE_EXTENSIONS[ext] || 'unknown'
   }
 
   /**
@@ -117,11 +153,11 @@ export class DocumentParser {
    * File parsing (auto format detection)
    *
    * @param filePath - File path to parse
-   * @returns Parsed text
+   * @returns Parsed text and optional language
    * @throws ValidationError - Path traversal, size exceeded, unsupported format
    * @throws FileOperationError - File read failed, parse failed
    */
-  async parseFile(filePath: string): Promise<string> {
+  async parseFile(filePath: string): Promise<{ text: string; language?: string }> {
     // Validation
     this.validateFilePath(filePath)
     this.validateFileSize(filePath)
@@ -130,13 +166,37 @@ export class DocumentParser {
     const ext = extname(filePath).toLowerCase()
     switch (ext) {
       case '.pdf':
-        return await this.parsePdf(filePath)
+        return { text: await this.parsePdf(filePath) }
       case '.docx':
-        return await this.parseDocx(filePath)
+        return { text: await this.parseDocx(filePath) }
       case '.txt':
-        return await this.parseTxt(filePath)
+        return { text: await this.parseTxt(filePath) }
       case '.md':
-        return await this.parseMd(filePath)
+        return { text: await this.parseMd(filePath) }
+      // Code file support
+      case '.ts':
+      case '.tsx':
+      case '.js':
+      case '.jsx':
+      case '.py':
+      case '.java':
+      case '.go':
+      case '.rs':
+      case '.c':
+      case '.cpp':
+      case '.cc':
+      case '.cxx':
+      case '.h':
+      case '.hpp':
+      case '.rb':
+      case '.php':
+      case '.cs':
+      case '.sh':
+      case '.sql':
+        return {
+          text: await this.parseCode(filePath),
+          language: this.detectLanguage(filePath),
+        }
       default:
         throw new ValidationError(`Unsupported file format: ${ext}`)
     }
@@ -209,6 +269,24 @@ export class DocumentParser {
       return text
     } catch (error) {
       throw new FileOperationError(`Failed to parse MD: ${filePath}`, error as Error)
+    }
+  }
+
+  /**
+   * Code file parsing (plain UTF-8 text)
+   *
+   * @param filePath - Code file path
+   * @returns Parsed text
+   * @throws FileOperationError - File read failed
+   */
+  private async parseCode(filePath: string): Promise<string> {
+    try {
+      const text = await readFile(filePath, 'utf-8')
+      const language = this.detectLanguage(filePath)
+      console.log(`Parsed CODE (${language}): ${filePath} (${text.length} characters)`)
+      return text
+    } catch (error) {
+      throw new FileOperationError(`Failed to parse CODE: ${filePath}`, error as Error)
     }
   }
 }

@@ -26,6 +26,8 @@ export interface DocumentMetadata {
   fileSize: number
   /** File type (extension) */
   fileType: string
+  /** Programming language (optional, for code files) */
+  language?: string
 }
 
 /**

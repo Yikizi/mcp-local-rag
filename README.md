@@ -62,9 +62,11 @@ This project solves these problems by running everything locally. Documents neve
 
 ## What You Get
 
-The server provides five tools through MCP:
+The server provides six tools through MCP:
 
-**Document ingestion** handles PDF, DOCX, TXT, and Markdown files. Point it at a file, and it extracts the text, splits it into searchable chunks, generates embeddings using a local model, and stores everything in a local vector database. If you ingest the same file again, it replaces the old version—no duplicate data.
+**Document ingestion** handles PDF, DOCX, TXT, Markdown, and code files (TypeScript, JavaScript, Python, Java, Go, Rust, C/C++, Ruby, PHP, C#, Shell, SQL). Point it at a file, and it extracts the text, splits it into searchable chunks, generates embeddings using a local model, and stores everything in a local vector database. If you ingest the same file again, it replaces the old version—no duplicate data.
+
+**Text snippet memorization** lets you store code snippets, notes, or any text directly without file I/O using the `memorize_text` tool. Perfect for quick note-taking or caching frequently referenced code. Snippets are stored with synthetic paths like `memory://label` and can be deleted like regular files.
 
 **Semantic search** lets you query in natural language. Instead of keyword matching, it understands meaning. Ask "how does authentication work" and it finds relevant sections even if they use different words like "login flow" or "credential validation."
 
@@ -485,6 +487,20 @@ Currently supported:
 - **Microsoft Word**: `.docx` (uses mammoth, not `.doc`)
 - **Plain Text**: `.txt`
 - **Markdown**: `.md`, `.markdown`
+- **Code Files**:
+  - **TypeScript**: `.ts`, `.tsx`
+  - **JavaScript**: `.js`, `.jsx`
+  - **Python**: `.py`
+  - **Java**: `.java`
+  - **Go**: `.go`
+  - **Rust**: `.rs`
+  - **C/C++**: `.c`, `.cpp`, `.cc`, `.cxx`, `.h`, `.hpp`
+  - **Ruby**: `.rb`
+  - **PHP**: `.php`
+  - **C#**: `.cs`
+  - **Shell**: `.sh`
+  - **SQL**: `.sql`
+- **Text Snippets**: Direct text ingestion via `memorize_text` tool (no file needed)
 
 **Not yet supported**:
 - Excel/CSV (`.xlsx`, `.csv`)
