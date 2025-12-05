@@ -214,7 +214,7 @@ export class DocumentParser {
       const buffer = await readFile(filePath)
       const parser = new PDFParse({ data: buffer })
       const result = await parser.getText()
-      console.log(`Parsed PDF: ${filePath} (${result.text.length} characters)`)
+      console.error(`Parsed PDF: ${filePath} (${result.text.length} characters)`)
       return result.text
     } catch (error) {
       throw new FileOperationError(`Failed to parse PDF: ${filePath}`, error as Error)
@@ -231,7 +231,7 @@ export class DocumentParser {
   private async parseDocx(filePath: string): Promise<string> {
     try {
       const result = await mammoth.extractRawText({ path: filePath })
-      console.log(`Parsed DOCX: ${filePath} (${result.value.length} characters)`)
+      console.error(`Parsed DOCX: ${filePath} (${result.value.length} characters)`)
       return result.value
     } catch (error) {
       throw new FileOperationError(`Failed to parse DOCX: ${filePath}`, error as Error)
@@ -248,7 +248,7 @@ export class DocumentParser {
   private async parseTxt(filePath: string): Promise<string> {
     try {
       const text = await readFile(filePath, 'utf-8')
-      console.log(`Parsed TXT: ${filePath} (${text.length} characters)`)
+      console.error(`Parsed TXT: ${filePath} (${text.length} characters)`)
       return text
     } catch (error) {
       throw new FileOperationError(`Failed to parse TXT: ${filePath}`, error as Error)
@@ -265,7 +265,7 @@ export class DocumentParser {
   private async parseMd(filePath: string): Promise<string> {
     try {
       const text = await readFile(filePath, 'utf-8')
-      console.log(`Parsed MD: ${filePath} (${text.length} characters)`)
+      console.error(`Parsed MD: ${filePath} (${text.length} characters)`)
       return text
     } catch (error) {
       throw new FileOperationError(`Failed to parse MD: ${filePath}`, error as Error)
