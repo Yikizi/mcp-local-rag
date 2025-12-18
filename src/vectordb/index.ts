@@ -1,6 +1,7 @@
 // VectorStore implementation with LanceDB integration
 
 import { type Connection, type Table, connect } from '@lancedb/lancedb'
+import * as arrow from 'apache-arrow'
 
 // ============================================
 // Type Definitions
@@ -27,7 +28,19 @@ export interface DocumentMetadata {
   /** File type (extension) */
   fileType: string
   /** Programming language (optional, for code files) */
-  language?: string
+  language?: string | null | undefined
+  /** Tags for categorization */
+  tags?: string[]
+  /** Associated project identifier */
+  project?: string | null | undefined
+  /** Memory type: 'file' | 'memory' | 'lesson' | 'note' */
+  memoryType?: string | null | undefined
+  /** Expiration timestamp (ISO 8601 format) */
+  expiresAt?: string | null | undefined
+  /** Creation timestamp (ISO 8601 format) */
+  createdAt?: string | null | undefined
+  /** Last update timestamp (ISO 8601 format) */
+  updatedAt?: string | null | undefined
 }
 
 /**
@@ -84,6 +97,48 @@ export class DatabaseError extends Error {
 }
 
 // ============================================
+// Helper Functions
+// ============================================
+
+/**
+ * Validate file path to prevent SQL injection
+ *
+ * @param filePath - File path to validate
+ * @throws Error if file path contains invalid characters
+ */
+function validateFilePath(filePath: string): void {
+  if (!filePath || typeof filePath !== 'string') {
+    throw new Error('Invalid file path: must be a non-empty string')
+  }
+
+  // For memory:// paths, validate label format (alphanumeric, hyphens, underscores, dots)
+  if (filePath.startsWith('memory://')) {
+    const label = filePath.substring(9) // Remove 'memory://' prefix
+    if (!/^[\w.-]+$/.test(label)) {
+      throw new Error(
+        'Invalid memory label: must contain only alphanumeric characters, hyphens, underscores, and dots'
+      )
+    }
+    return
+  }
+
+  // For regular file paths, ensure they are absolute paths
+  // and don't contain SQL injection characters
+  if (!filePath.startsWith('/')) {
+    throw new Error('Invalid file path: must be an absolute path starting with /')
+  }
+
+  // Check for dangerous SQL characters that could be used for injection
+  // Allow common path characters: alphanumeric, /, -, _, ., spaces, and common symbols
+  // Disallow: ; ' " \ ` and control characters
+  const dangerousCharsRegex = /[;'"\\`]/
+  const hasControlChars = filePath.split('').some((char) => char.charCodeAt(0) < 32)
+  if (dangerousCharsRegex.test(filePath) || hasControlChars) {
+    throw new Error('Invalid file path: contains potentially dangerous characters')
+  }
+}
+
+// ============================================
 // VectorStore Class
 // ============================================
 
@@ -102,6 +157,44 @@ export class VectorStore {
 
   constructor(config: VectorStoreConfig) {
     this.config = config
+  }
+
+  /**
+   * Get the schema for the chunks table
+   */
+  private getSchema(): arrow.Schema {
+    return new arrow.Schema([
+      new arrow.Field('id', new arrow.Utf8(), false),
+      new arrow.Field('filePath', new arrow.Utf8(), false),
+      new arrow.Field('chunkIndex', new arrow.Int32(), false),
+      new arrow.Field('text', new arrow.Utf8(), false),
+      new arrow.Field(
+        'vector',
+        new arrow.FixedSizeList(384, new arrow.Field('item', new arrow.Float32(), false)),
+        false
+      ),
+      new arrow.Field(
+        'metadata',
+        new arrow.Struct([
+          new arrow.Field('fileName', new arrow.Utf8(), false),
+          new arrow.Field('fileSize', new arrow.Int32(), false),
+          new arrow.Field('fileType', new arrow.Utf8(), false),
+          new arrow.Field('language', new arrow.Utf8(), true),
+          new arrow.Field('memoryType', new arrow.Utf8(), true),
+          new arrow.Field(
+            'tags',
+            new arrow.List(new arrow.Field('item', new arrow.Utf8(), false)),
+            true
+          ),
+          new arrow.Field('project', new arrow.Utf8(), true),
+          new arrow.Field('expiresAt', new arrow.Utf8(), true),
+          new arrow.Field('createdAt', new arrow.Utf8(), true),
+          new arrow.Field('updatedAt', new arrow.Utf8(), true),
+        ]),
+        false
+      ),
+      new arrow.Field('timestamp', new arrow.Utf8(), false),
+    ])
   }
 
   /**
@@ -137,6 +230,9 @@ export class VectorStore {
    * @param filePath - File path (absolute)
    */
   async deleteChunks(filePath: string): Promise<void> {
+    // Validate file path to prevent SQL injection
+    validateFilePath(filePath)
+
     if (!this.table) {
       // If table doesn't exist, no deletion targets, return normally
       console.error('VectorStore: Skipping deletion as table does not exist')
@@ -145,7 +241,7 @@ export class VectorStore {
 
     try {
       // Use LanceDB delete API to remove records matching filePath
-      // Escape single quotes to prevent SQL injection
+      // Escape single quotes as additional safety measure
       const escapedFilePath = filePath.replace(/'/g, "''")
 
       // LanceDB's delete method doesn't throw errors if targets don't exist,
@@ -181,22 +277,31 @@ export class VectorStore {
 
     try {
       if (!this.table) {
-        // Create table on first insertion
+        // Create table on first insertion with explicit schema
         if (!this.db) {
           throw new DatabaseError('VectorStore is not initialized. Call initialize() first.')
         }
-        // LanceDB's createTable API accepts data as Record<string, unknown>[]
         const records = chunks.map((chunk) => chunk as unknown as Record<string, unknown>)
-        this.table = await this.db.createTable(this.config.tableName, records)
+        console.error(
+          'Creating table with records:',
+          JSON.stringify(records[0]?.['metadata'], null, 2)
+        )
+        const schema = this.getSchema()
+        this.table = await this.db.createTable(this.config.tableName, records, { schema })
         console.error(`VectorStore: Created table "${this.config.tableName}"`)
       } else {
         // Add data to existing table
         const records = chunks.map((chunk) => chunk as unknown as Record<string, unknown>)
+        console.error(
+          'Adding records with metadata:',
+          JSON.stringify(records[0]?.['metadata'], null, 2)
+        )
         await this.table.add(records)
       }
 
       console.error(`VectorStore: Inserted ${chunks.length} chunks`)
     } catch (error) {
+      console.error('Insert error details:', error)
       throw new DatabaseError('Failed to insert chunks', error as Error)
     }
   }
@@ -206,9 +311,19 @@ export class VectorStore {
    *
    * @param queryVector - Query vector (384 dimensions)
    * @param limit - Number of results to retrieve (default 5)
+   * @param filters - Optional filters for search results
    * @returns Array of search results (sorted by score descending)
    */
-  async search(queryVector: number[], limit = 5): Promise<SearchResult[]> {
+  async search(
+    queryVector: number[],
+    limit = 5,
+    filters?: {
+      type?: 'all' | 'file' | 'memory'
+      tags?: string[]
+      project?: string
+      minScore?: number
+    }
+  ): Promise<SearchResult[]> {
     if (!this.table) {
       // Return empty array if table doesn't exist
       console.error('VectorStore: Returning empty results as table does not exist')
@@ -227,16 +342,77 @@ export class VectorStore {
 
     try {
       // Use LanceDB's vector search API
-      const results = await this.table.vectorSearch(queryVector).limit(limit).toArray()
+      const results = await this.table
+        .vectorSearch(queryVector)
+        .limit(limit * 3)
+        .toArray()
 
       // Convert to SearchResult format
-      return results.map((result) => ({
-        filePath: result.filePath as string,
-        chunkIndex: result.chunkIndex as number,
-        text: result.text as string,
-        score: result._distance as number, // LanceDB returns distance score (closer to 0 means more similar)
-        metadata: result.metadata as DocumentMetadata,
-      }))
+      // Note: LanceDB returns Arrow vector types (e.g., Utf8Vector) which need
+      // to be converted to JS arrays using toArray()
+      let searchResults: SearchResult[] = results.map((result) => {
+        const rawMetadata = result.metadata as DocumentMetadata
+        // Convert Arrow Utf8Vector to JS array
+        let tags: string[] = []
+        if (rawMetadata.tags) {
+          if (Array.isArray(rawMetadata.tags)) {
+            tags = [...rawMetadata.tags]
+          } else if (
+            typeof (rawMetadata.tags as unknown as { toArray?: () => string[] }).toArray ===
+            'function'
+          ) {
+            tags = (rawMetadata.tags as unknown as { toArray: () => string[] }).toArray()
+          }
+        }
+        return {
+          filePath: result.filePath as string,
+          chunkIndex: result.chunkIndex as number,
+          text: result.text as string,
+          score: result._distance as number, // LanceDB returns distance score (closer to 0 means more similar)
+          metadata: {
+            fileName: rawMetadata.fileName,
+            fileSize: rawMetadata.fileSize,
+            fileType: rawMetadata.fileType,
+            language: rawMetadata.language,
+            memoryType: rawMetadata.memoryType,
+            tags,
+            project: rawMetadata.project,
+            expiresAt: rawMetadata.expiresAt,
+            createdAt: rawMetadata.createdAt,
+            updatedAt: rawMetadata.updatedAt,
+          },
+        }
+      })
+
+      // Apply filters
+      if (filters) {
+        // Filter by type
+        if (filters.type === 'memory') {
+          searchResults = searchResults.filter((r) => r.filePath.startsWith('memory://'))
+        } else if (filters.type === 'file') {
+          searchResults = searchResults.filter((r) => !r.filePath.startsWith('memory://'))
+        }
+
+        // Filter by tags (AND logic - must have all specified tags)
+        if (filters.tags && filters.tags.length > 0) {
+          searchResults = searchResults.filter((r) =>
+            filters.tags!.every((tag) => r.metadata.tags?.includes(tag))
+          )
+        }
+
+        // Filter by project
+        if (filters.project) {
+          searchResults = searchResults.filter((r) => r.metadata.project === filters.project)
+        }
+
+        // Filter by minimum score (distance-based: lower is better, so <= for filtering)
+        if (filters.minScore !== undefined) {
+          searchResults = searchResults.filter((r) => r.score <= filters.minScore!)
+        }
+      }
+
+      // Return up to limit results
+      return searchResults.slice(0, limit)
     } catch (error) {
       throw new DatabaseError('Failed to search vectors', error as Error)
     }
@@ -245,9 +421,23 @@ export class VectorStore {
   /**
    * Get list of ingested files
    *
+   * @param filters - Optional filters for file listing
    * @returns Array of file information
    */
-  async listFiles(): Promise<{ filePath: string; chunkCount: number; timestamp: string }[]> {
+  async listFiles(filters?: {
+    type?: 'all' | 'file' | 'memory'
+    tags?: string[]
+    project?: string
+    search?: string
+    limit?: number
+  }): Promise<
+    {
+      filePath: string
+      chunkCount: number
+      timestamp: string
+      metadata?: DocumentMetadata
+    }[]
+  > {
     if (!this.table) {
       return [] // Return empty array if table doesn't exist
     }
@@ -257,11 +447,41 @@ export class VectorStore {
       const allRecords = await this.table.query().toArray()
 
       // Group by file path
-      const fileMap = new Map<string, { chunkCount: number; timestamp: string }>()
+      const fileMap = new Map<
+        string,
+        { chunkCount: number; timestamp: string; metadata?: DocumentMetadata }
+      >()
 
       for (const record of allRecords) {
         const filePath = record.filePath as string
         const timestamp = record.timestamp as string
+        const rawMetadata = record.metadata as DocumentMetadata
+
+        // Normalize metadata: LanceDB returns Arrow vector types (e.g., Utf8Vector)
+        // which need to be converted to JS arrays using toArray()
+        let tags: string[] = []
+        if (rawMetadata.tags) {
+          if (Array.isArray(rawMetadata.tags)) {
+            tags = [...rawMetadata.tags]
+          } else if (
+            typeof (rawMetadata.tags as unknown as { toArray?: () => string[] }).toArray ===
+            'function'
+          ) {
+            tags = (rawMetadata.tags as unknown as { toArray: () => string[] }).toArray()
+          }
+        }
+        const metadata: DocumentMetadata = {
+          fileName: rawMetadata.fileName,
+          fileSize: rawMetadata.fileSize,
+          fileType: rawMetadata.fileType,
+          language: rawMetadata.language,
+          memoryType: rawMetadata.memoryType,
+          tags,
+          project: rawMetadata.project,
+          expiresAt: rawMetadata.expiresAt,
+          createdAt: rawMetadata.createdAt,
+          updatedAt: rawMetadata.updatedAt,
+        }
 
         if (fileMap.has(filePath)) {
           const fileInfo = fileMap.get(filePath)
@@ -270,19 +490,75 @@ export class VectorStore {
             // Keep most recent timestamp
             if (timestamp > fileInfo.timestamp) {
               fileInfo.timestamp = timestamp
+              fileInfo.metadata = metadata // Update metadata to latest
             }
           }
         } else {
-          fileMap.set(filePath, { chunkCount: 1, timestamp })
+          fileMap.set(filePath, { chunkCount: 1, timestamp, metadata })
         }
       }
 
       // Convert Map to array of objects
-      return Array.from(fileMap.entries()).map(([filePath, info]) => ({
-        filePath,
-        chunkCount: info.chunkCount,
-        timestamp: info.timestamp,
-      }))
+      let results: {
+        filePath: string
+        chunkCount: number
+        timestamp: string
+        metadata?: DocumentMetadata
+      }[] = Array.from(fileMap.entries()).map(([filePath, info]) => {
+        const result: {
+          filePath: string
+          chunkCount: number
+          timestamp: string
+          metadata?: DocumentMetadata
+        } = {
+          filePath,
+          chunkCount: info.chunkCount,
+          timestamp: info.timestamp,
+        }
+        if (info.metadata) {
+          result.metadata = info.metadata
+        }
+        return result
+      })
+
+      // Apply filters
+      if (filters) {
+        // Filter by type
+        if (filters.type === 'memory') {
+          results = results.filter((r) => r.filePath.startsWith('memory://'))
+        } else if (filters.type === 'file') {
+          results = results.filter((r) => !r.filePath.startsWith('memory://'))
+        }
+
+        // Filter by tags (AND logic - must have all specified tags)
+        if (filters.tags && filters.tags.length > 0) {
+          results = results.filter((r) =>
+            filters.tags!.every((tag) => r.metadata?.tags?.includes(tag))
+          )
+        }
+
+        // Filter by project
+        if (filters.project) {
+          results = results.filter((r) => r.metadata?.project === filters.project)
+        }
+
+        // Filter by search string (label/filename substring match)
+        if (filters.search) {
+          const searchLower = filters.search.toLowerCase()
+          results = results.filter(
+            (r) =>
+              r.filePath.toLowerCase().includes(searchLower) ||
+              r.metadata?.fileName.toLowerCase().includes(searchLower)
+          )
+        }
+
+        // Apply limit
+        if (filters.limit && filters.limit > 0) {
+          results = results.slice(0, filters.limit)
+        }
+      }
+
+      return results
     } catch (error) {
       throw new DatabaseError('Failed to list files', error as Error)
     }
@@ -331,6 +607,104 @@ export class VectorStore {
       }
     } catch (error) {
       throw new DatabaseError('Failed to get status', error as Error)
+    }
+  }
+
+  /**
+   * Get memory by label
+   *
+   * @param label - Memory label
+   * @returns Array of chunks for the specified memory
+   */
+  async getMemoryByLabel(label: string): Promise<VectorChunk[]> {
+    if (!this.table) {
+      return []
+    }
+
+    try {
+      const filePath = `memory://${label}`
+      const allRecords = await this.table.query().toArray()
+
+      // Filter by file path
+      const matchingRecords = allRecords.filter((record) => record.filePath === filePath)
+
+      // Convert to VectorChunk format and normalize metadata
+      // Note: LanceDB returns Arrow vector types (e.g., Utf8Vector) which need
+      // to be converted to JS arrays using toArray()
+      return matchingRecords.map((record) => {
+        const rawMetadata = record.metadata as DocumentMetadata
+        // Convert Arrow Utf8Vector to JS array
+        let tags: string[] = []
+        if (rawMetadata.tags) {
+          if (Array.isArray(rawMetadata.tags)) {
+            tags = [...rawMetadata.tags]
+          } else if (
+            typeof (rawMetadata.tags as unknown as { toArray?: () => string[] }).toArray ===
+            'function'
+          ) {
+            tags = (rawMetadata.tags as unknown as { toArray: () => string[] }).toArray()
+          }
+        }
+        return {
+          id: record.id as string,
+          filePath: record.filePath as string,
+          chunkIndex: record.chunkIndex as number,
+          text: record.text as string,
+          vector: record.vector as number[],
+          metadata: {
+            fileName: rawMetadata.fileName,
+            fileSize: rawMetadata.fileSize,
+            fileType: rawMetadata.fileType,
+            language: rawMetadata.language,
+            memoryType: rawMetadata.memoryType,
+            tags,
+            project: rawMetadata.project,
+            expiresAt: rawMetadata.expiresAt,
+            createdAt: rawMetadata.createdAt,
+            updatedAt: rawMetadata.updatedAt,
+          },
+          timestamp: record.timestamp as string,
+        }
+      })
+    } catch (error) {
+      throw new DatabaseError(`Failed to get memory by label: ${label}`, error as Error)
+    }
+  }
+
+  /**
+   * Cleanup expired memories
+   *
+   * @returns Number of deleted entries
+   */
+  async cleanupExpired(): Promise<number> {
+    if (!this.table) {
+      return 0
+    }
+
+    try {
+      const now = new Date().toISOString()
+      const allRecords = await this.table.query().toArray()
+
+      // Find expired entries
+      const expiredFilePaths = new Set<string>()
+      for (const record of allRecords) {
+        const metadata = record.metadata as DocumentMetadata
+        if (metadata?.expiresAt && metadata.expiresAt < now) {
+          expiredFilePaths.add(record.filePath as string)
+        }
+      }
+
+      // Delete expired entries
+      let deletedCount = 0
+      for (const filePath of expiredFilePaths) {
+        await this.deleteChunks(filePath)
+        deletedCount++
+      }
+
+      console.error(`VectorStore: Cleaned up ${deletedCount} expired entries`)
+      return deletedCount
+    } catch (error) {
+      throw new DatabaseError('Failed to cleanup expired memories', error as Error)
     }
   }
 }
