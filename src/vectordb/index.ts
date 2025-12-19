@@ -198,6 +198,147 @@ export class VectorStore {
   }
 
   /**
+   * Check if table schema needs migration
+   * Returns true if migration is needed (missing new fields like createdAt, updatedAt)
+   */
+  private async needsMigration(table: Table): Promise<boolean> {
+    try {
+      const schema = await table.schema()
+      const metadataField = schema.fields.find((f) => f.name === 'metadata')
+
+      if (!metadataField) {
+        return true // No metadata field at all - needs migration
+      }
+
+      // Check if metadata is a Struct type and has the new fields
+      // Note: instanceof arrow.Struct doesn't work reliably, use typeId instead
+      const metadataType = metadataField.type
+      if (metadataType.typeId === arrow.Type.Struct && 'children' in metadataType) {
+        const fieldNames = (metadataType as arrow.Struct).children.map((f) => f.name)
+        // Check for the newer fields that may be missing in old schemas
+        const hasCreatedAt = fieldNames.includes('createdAt')
+        const hasUpdatedAt = fieldNames.includes('updatedAt')
+        const hasMemoryType = fieldNames.includes('memoryType')
+        const hasTags = fieldNames.includes('tags')
+
+        if (!hasCreatedAt || !hasUpdatedAt || !hasMemoryType || !hasTags) {
+          console.error(
+            `VectorStore: Schema missing fields - createdAt: ${hasCreatedAt}, updatedAt: ${hasUpdatedAt}, memoryType: ${hasMemoryType}, tags: ${hasTags}`
+          )
+          return true
+        }
+      }
+
+      return false
+    } catch (error) {
+      console.error('VectorStore: Error checking schema, assuming migration needed:', error)
+      return true
+    }
+  }
+
+  /**
+   * Migrate data from old schema to new schema
+   */
+  private async migrateTable(): Promise<void> {
+    if (!this.db || !this.table) {
+      return
+    }
+
+    console.error('VectorStore: Starting schema migration...')
+
+    try {
+      // Read all existing data
+      const allRecords = await this.table.query().toArray()
+      console.error(`VectorStore: Read ${allRecords.length} records for migration`)
+
+      if (allRecords.length === 0) {
+        // No data to migrate, just drop and recreate
+        await this.db.dropTable(this.config.tableName)
+        this.table = null
+        console.error('VectorStore: Dropped empty table, will recreate on first insert')
+        return
+      }
+
+      // Transform records to new schema format
+      const now = new Date().toISOString()
+      const migratedRecords = allRecords.map((record) => {
+        const rawMetadata = record.metadata as Record<string, unknown>
+
+        // Normalize tags - handle Arrow vector types
+        let tags: string[] = []
+        const rawTags = rawMetadata['tags']
+        if (rawTags) {
+          if (Array.isArray(rawTags)) {
+            tags = [...rawTags] as string[]
+          } else if (typeof (rawTags as { toArray?: () => string[] }).toArray === 'function') {
+            tags = (rawTags as { toArray: () => string[] }).toArray()
+          }
+        }
+
+        // Normalize vector - handle Arrow FixedSizeList types
+        // LanceDB returns vectors as Float32Array or similar typed arrays
+        let vector: number[] = []
+        if (record.vector) {
+          if (Array.isArray(record.vector)) {
+            vector = [...record.vector] as number[]
+          } else if (record.vector instanceof Float32Array) {
+            vector = Array.from(record.vector)
+          } else if (
+            typeof (record.vector as { toArray?: () => number[] }).toArray === 'function'
+          ) {
+            vector = Array.from((record.vector as { toArray: () => number[] }).toArray())
+          } else if (typeof record.vector === 'object' && record.vector !== null) {
+            // Handle other iterable types
+            vector = Array.from(record.vector as Iterable<number>)
+          }
+        }
+
+        // Build migrated metadata with all required fields
+        const migratedMetadata: DocumentMetadata = {
+          fileName: (rawMetadata['fileName'] as string) || 'unknown',
+          fileSize: (rawMetadata['fileSize'] as number) || 0,
+          fileType: (rawMetadata['fileType'] as string) || 'unknown',
+          language: (rawMetadata['language'] as string | null) || null,
+          memoryType: (rawMetadata['memoryType'] as string | null) || null,
+          tags,
+          project: (rawMetadata['project'] as string | null) || null,
+          expiresAt: (rawMetadata['expiresAt'] as string | null) || null,
+          createdAt:
+            (rawMetadata['createdAt'] as string | null) || (record.timestamp as string) || now,
+          updatedAt:
+            (rawMetadata['updatedAt'] as string | null) || (record.timestamp as string) || now,
+        }
+
+        return {
+          id: record.id as string,
+          filePath: record.filePath as string,
+          chunkIndex: record.chunkIndex as number,
+          text: record.text as string,
+          vector,
+          metadata: migratedMetadata,
+          timestamp: (record.timestamp as string) || now,
+        }
+      })
+
+      // Drop old table
+      await this.db.dropTable(this.config.tableName)
+      console.error('VectorStore: Dropped old table')
+
+      // Create new table with proper schema
+      const schema = this.getSchema()
+      this.table = await this.db.createTable(this.config.tableName, migratedRecords, { schema })
+      console.error(
+        `VectorStore: Created new table with ${migratedRecords.length} migrated records`
+      )
+
+      console.error('VectorStore: Migration completed successfully!')
+    } catch (error) {
+      console.error('VectorStore: Migration failed:', error)
+      throw new DatabaseError('Failed to migrate table schema', error as Error)
+    }
+  }
+
+  /**
    * Initialize LanceDB and create table
    */
   async initialize(): Promise<void> {
@@ -211,6 +352,12 @@ export class VectorStore {
         // Open existing table
         this.table = await this.db.openTable(this.config.tableName)
         console.error(`VectorStore: Opened existing table "${this.config.tableName}"`)
+
+        // Check if migration is needed
+        if (await this.needsMigration(this.table)) {
+          console.error('VectorStore: Schema migration required')
+          await this.migrateTable()
+        }
       } else {
         // Create new table (schema auto-defined on first data insertion)
         console.error(
