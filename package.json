@@ -1,6 +1,6 @@
 {
   "name": "@yikizi/mcp-local-rag",
-  "version": "0.4.0",
+  "version": "1.4.0",
   "description": "Local RAG MCP Server - Enhanced with code file support and text snippet ingestion (fork of shinpr/mcp-local-rag)",
   "main": "dist/index.js",
   "bin": {
