@@ -44,7 +44,7 @@ describe('Feature 1: Tags/Labels Support', () => {
   describe('memorize_text with tags parameter', () => {
     it('should accept and store empty tags array', async () => {
       const result = await ragServer.handleMemorizeText({
-        text: 'Test memory with empty tags',
+        text: 'Test memory with empty tags - this string must be at least fifty characters long for chunking',
         label: 'empty-tags-test',
         tags: [],
       })
@@ -56,7 +56,7 @@ describe('Feature 1: Tags/Labels Support', () => {
 
     it('should accept and store single tag', async () => {
       const result = await ragServer.handleMemorizeText({
-        text: 'Test memory with single tag',
+        text: 'Test memory with single tag - this text needs to be at least fifty characters long for chunking',
         label: 'single-tag-test',
         tags: ['project-alpha'],
       })
@@ -77,7 +77,7 @@ describe('Feature 1: Tags/Labels Support', () => {
 
     it('should accept and store multiple tags', async () => {
       const result = await ragServer.handleMemorizeText({
-        text: 'Test memory with multiple tags',
+        text: 'Test memory with multiple tags - this text needs to be at least fifty characters for chunking',
         label: 'multi-tag-test',
         tags: ['project-beta', 'experiment', 'machine-learning'],
       })
@@ -99,7 +99,7 @@ describe('Feature 1: Tags/Labels Support', () => {
     it('should reject invalid tags (non-string values)', async () => {
       await expect(
         ragServer.handleMemorizeText({
-          text: 'Test memory with invalid tags',
+          text: 'Test memory with invalid tags - this text needs to be at least fifty characters for chunking',
           label: 'invalid-tags-test',
           tags: [123, true, null] as unknown as string[],
         })
@@ -108,7 +108,7 @@ describe('Feature 1: Tags/Labels Support', () => {
 
     it('should default to empty array when tags not provided', async () => {
       const result = await ragServer.handleMemorizeText({
-        text: 'Test memory without tags',
+        text: 'Test memory without tags - this text needs to be at least fifty characters long for chunking',
         label: 'no-tags-test',
       })
 
@@ -126,7 +126,10 @@ describe('Feature 1: Tags/Labels Support', () => {
   describe('ingest_file with tags parameter', () => {
     it('should accept tags parameter for file ingestion', async () => {
       const testFile = resolve(testDataDir, 'test-file-with-tags.txt')
-      writeFileSync(testFile, 'File content with tags')
+      writeFileSync(
+        testFile,
+        'File content with tags - this content must be at least fifty characters long for chunking'
+      )
 
       const result = await ragServer.handleIngestFile({
         filePath: testFile,
@@ -194,7 +197,7 @@ describe('Feature 2: Memory Types Distinction', () => {
   describe('memorize_text with type parameter', () => {
     it('should default to type "memory" when not specified', async () => {
       const result = await ragServer.handleMemorizeText({
-        text: 'Default memory type test',
+        text: 'Default memory type test - this string must be at least fifty characters long for chunking',
         label: 'default-type-test',
       })
 
@@ -210,7 +213,7 @@ describe('Feature 2: Memory Types Distinction', () => {
 
     it('should accept type "memory"', async () => {
       const result = await ragServer.handleMemorizeText({
-        text: 'Explicit memory type',
+        text: 'Explicit memory type - this string must be at least fifty characters long for chunking to work',
         label: 'explicit-memory-type',
         type: 'memory',
       })
@@ -226,7 +229,7 @@ describe('Feature 2: Memory Types Distinction', () => {
 
     it('should accept type "lesson"', async () => {
       const result = await ragServer.handleMemorizeText({
-        text: 'This is a lesson learned from debugging',
+        text: 'This is a lesson learned from debugging - adding more chars for chunk min',
         label: 'lesson-type-test',
         type: 'lesson',
       })
@@ -242,7 +245,7 @@ describe('Feature 2: Memory Types Distinction', () => {
 
     it('should accept type "note"', async () => {
       const result = await ragServer.handleMemorizeText({
-        text: 'Quick note for later',
+        text: 'Quick note for later - this string must be at least fifty characters for chunking to work',
         label: 'note-type-test',
         type: 'note',
       })
@@ -259,7 +262,7 @@ describe('Feature 2: Memory Types Distinction', () => {
     it('should reject invalid type values', async () => {
       await expect(
         ragServer.handleMemorizeText({
-          text: 'Invalid type test',
+          text: 'Invalid type test - this string must be at least fifty characters for chunking to work',
           label: 'invalid-type-test',
           type: 'invalid-type' as any,
         })
@@ -270,7 +273,10 @@ describe('Feature 2: Memory Types Distinction', () => {
   describe('ingest_file sets type to "file"', () => {
     it('should automatically set type to "file" for ingested files', async () => {
       const testFile = resolve(testDataDir, 'test-file-type.txt')
-      writeFileSync(testFile, 'File type test content')
+      writeFileSync(
+        testFile,
+        'File type test content - this content must be at least fifty characters long for chunking'
+      )
 
       const result = await ragServer.handleIngestFile({
         filePath: testFile,
@@ -326,14 +332,20 @@ describe('Feature 3: Filtered Listing (list_files enhancement)', () => {
     // Setup test data
     // Files
     const file1 = resolve(testDataDir, 'doc1.txt')
-    writeFileSync(file1, 'Document 1 content')
+    writeFileSync(
+      file1,
+      'Document 1 content - this content must be at least fifty characters long for chunking work'
+    )
     await ragServer.handleIngestFile({
       filePath: file1,
       tags: ['project-a', 'docs'],
     })
 
     const file2 = resolve(testDataDir, 'doc2.txt')
-    writeFileSync(file2, 'Document 2 content')
+    writeFileSync(
+      file2,
+      'Document 2 content - this content must be at least fifty characters long for chunking work'
+    )
     await ragServer.handleIngestFile({
       filePath: file2,
       tags: ['project-b', 'docs'],
@@ -341,21 +353,21 @@ describe('Feature 3: Filtered Listing (list_files enhancement)', () => {
 
     // Memories
     await ragServer.handleMemorizeText({
-      text: 'Memory about project A',
+      text: 'Memory about project A - this string must be at least fifty characters long for chunking',
       label: 'memory-a',
       type: 'memory',
       tags: ['project-a', 'important'],
     })
 
     await ragServer.handleMemorizeText({
-      text: 'Lesson learned from debugging',
+      text: 'Lesson learned from debugging - this string must be at least fifty characters for chunk',
       label: 'lesson-1',
       type: 'lesson',
       tags: ['project-a', 'debugging'],
     })
 
     await ragServer.handleMemorizeText({
-      text: 'Quick note for project B',
+      text: 'Quick note for project B - this string must be at least fifty characters for chunking',
       label: 'note-b',
       type: 'note',
       tags: ['project-b'],
@@ -436,7 +448,7 @@ describe('Feature 3: Filtered Listing (list_files enhancement)', () => {
     it('should return entries with specified project', async () => {
       // First add memories with project field
       await ragServer.handleMemorizeText({
-        text: 'Project specific memory',
+        text: 'Project specific memory - this string must be at least fifty characters long for chunking',
         label: 'project-memory',
         project: 'my-project',
       })
@@ -591,7 +603,7 @@ describe('Feature 4: TTL/Expiration Support', () => {
   describe('TTL parameter parsing', () => {
     it('should accept ttl="1d" (1 day)', async () => {
       const result = await ragServer.handleMemorizeText({
-        text: 'Memory with 1 day TTL',
+        text: 'Memory with 1 day TTL - this string must be at least fifty characters for chunking test',
         label: 'ttl-1d',
         ttl: '1d',
       })
@@ -613,7 +625,7 @@ describe('Feature 4: TTL/Expiration Support', () => {
 
     it('should accept ttl="7d" (7 days)', async () => {
       const result = await ragServer.handleMemorizeText({
-        text: 'Memory with 7 days TTL',
+        text: 'Memory with 7 days TTL - this string must be at least fifty characters for chunking test',
         label: 'ttl-7d',
         ttl: '7d',
       })
@@ -632,7 +644,7 @@ describe('Feature 4: TTL/Expiration Support', () => {
 
     it('should accept ttl="30d" (30 days)', async () => {
       const result = await ragServer.handleMemorizeText({
-        text: 'Memory with 30 days TTL',
+        text: 'Memory with 30 days TTL - this string must be at least fifty characters for chunk test',
         label: 'ttl-30d',
         ttl: '30d',
       })
@@ -651,7 +663,7 @@ describe('Feature 4: TTL/Expiration Support', () => {
 
     it('should accept ttl="1y" (1 year)', async () => {
       const result = await ragServer.handleMemorizeText({
-        text: 'Memory with 1 year TTL',
+        text: 'Memory with 1 year TTL - this string must be at least fifty characters for chunk test',
         label: 'ttl-1y',
         ttl: '1y',
       })
@@ -670,7 +682,7 @@ describe('Feature 4: TTL/Expiration Support', () => {
 
     it('should accept ttl="permanent" (no expiration)', async () => {
       const result = await ragServer.handleMemorizeText({
-        text: 'Permanent memory',
+        text: 'Permanent memory - this string must be at least fifty characters long for chunking to work',
         label: 'ttl-permanent',
         ttl: 'permanent',
       })
@@ -687,7 +699,7 @@ describe('Feature 4: TTL/Expiration Support', () => {
 
     it('should default to permanent when ttl not specified', async () => {
       const result = await ragServer.handleMemorizeText({
-        text: 'Memory without TTL',
+        text: 'Memory without TTL - this string must be at least fifty characters for chunking test work',
         label: 'no-ttl',
       })
 
@@ -702,7 +714,7 @@ describe('Feature 4: TTL/Expiration Support', () => {
     it('should reject invalid TTL format', async () => {
       await expect(
         ragServer.handleMemorizeText({
-          text: 'Invalid TTL',
+          text: 'Invalid TTL - this string must be at least fifty characters long for chunking to work test',
           label: 'invalid-ttl',
           ttl: '5x' as any,
         })
@@ -715,7 +727,7 @@ describe('Feature 4: TTL/Expiration Support', () => {
       const before = new Date().toISOString()
 
       const result = await ragServer.handleMemorizeText({
-        text: 'Test createdAt',
+        text: 'Test createdAt - this string must be at least fifty characters long for chunking test work',
         label: 'created-at-test',
       })
 
@@ -735,7 +747,7 @@ describe('Feature 4: TTL/Expiration Support', () => {
 
     it('should include updatedAt timestamp', async () => {
       const result = await ragServer.handleMemorizeText({
-        text: 'Test updatedAt',
+        text: 'Test updatedAt - this string must be at least fifty characters long for chunking test work',
         label: 'updated-at-test',
       })
 
@@ -751,7 +763,7 @@ describe('Feature 4: TTL/Expiration Support', () => {
 
     it('should have createdAt equal to updatedAt initially', async () => {
       const result = await ragServer.handleMemorizeText({
-        text: 'Test timestamps',
+        text: 'Test timestamps - this string must be at least fifty characters long for chunking work test',
         label: 'timestamps-test',
       })
 
@@ -774,7 +786,7 @@ describe('Feature 4: TTL/Expiration Support', () => {
     it('should remove expired memories', async () => {
       // Create memory that expires immediately (for testing)
       await ragServer.handleMemorizeText({
-        text: 'Expired memory',
+        text: 'Expired memory - this string must be at least fifty characters long for chunking to work test',
         label: 'expired-test',
         ttl: '1d',
       })
@@ -791,7 +803,7 @@ describe('Feature 4: TTL/Expiration Support', () => {
 
     it('should keep non-expired memories', async () => {
       await ragServer.handleMemorizeText({
-        text: 'Non-expired memory',
+        text: 'Non-expired memory - this string must be at least fifty characters long for chunking to work',
         label: 'non-expired-test',
         ttl: '7d',
       })
@@ -809,7 +821,7 @@ describe('Feature 4: TTL/Expiration Support', () => {
 
     it('should keep permanent memories', async () => {
       await ragServer.handleMemorizeText({
-        text: 'Permanent memory',
+        text: 'Permanent memory - this string must be at least fifty characters long for chunking to work',
         label: 'permanent-test',
         ttl: 'permanent',
       })
@@ -878,7 +890,7 @@ describe('Feature 5: Memory Update/Append Support', () => {
     it('should replace entire content with new text', async () => {
       // Create initial memory
       await ragServer.handleMemorizeText({
-        text: 'Original content',
+        text: 'Original content - this string must be at least fifty characters long for chunking to work',
         label: 'replace-test',
       })
 
@@ -886,7 +898,7 @@ describe('Feature 5: Memory Update/Append Support', () => {
       await ragServer.handleUpdateMemory({
         label: 'replace-test',
         mode: 'replace',
-        text: 'New content',
+        text: 'New content for replacement - this string must be at least fifty characters for chunking',
       })
 
       // Verify content replaced
@@ -900,8 +912,12 @@ describe('Feature 5: Memory Update/Append Support', () => {
       )
 
       expect(memory).toBeDefined()
-      expect(memory.text).toContain('New content')
-      expect(memory.text).not.toContain('Original content')
+      expect(memory.text).toContain(
+        'New content for replacement - this string must be at least fifty characters for chunking'
+      )
+      expect(memory.text).not.toContain(
+        'Original content - this string must be at least fifty characters long for chunking to work'
+      )
     })
   })
 
@@ -909,7 +925,7 @@ describe('Feature 5: Memory Update/Append Support', () => {
     it('should append text to end of existing content', async () => {
       // Create initial memory
       await ragServer.handleMemorizeText({
-        text: 'Start content.',
+        text: 'Start content for testing - this string must be at least fifty characters for chunking work',
         label: 'append-test',
       })
 
@@ -917,7 +933,7 @@ describe('Feature 5: Memory Update/Append Support', () => {
       await ragServer.handleUpdateMemory({
         label: 'append-test',
         mode: 'append',
-        text: ' Appended content.',
+        text: 'Appended content - this string must be at least fifty characters long for chunking',
       })
 
       // Verify content appended
@@ -940,7 +956,7 @@ describe('Feature 5: Memory Update/Append Support', () => {
     it('should prepend text to beginning of existing content', async () => {
       // Create initial memory
       await ragServer.handleMemorizeText({
-        text: 'End content.',
+        text: 'End content - this string must be at least fifty characters long for chunking to work',
         label: 'prepend-test',
       })
 
@@ -948,7 +964,7 @@ describe('Feature 5: Memory Update/Append Support', () => {
       await ragServer.handleUpdateMemory({
         label: 'prepend-test',
         mode: 'prepend',
-        text: 'Prepended content. ',
+        text: 'Prepended content - this string must be at least fifty characters for chunk test ',
       })
 
       // Verify content prepended
@@ -971,7 +987,7 @@ describe('Feature 5: Memory Update/Append Support', () => {
     it('should replace all tags with new tags', async () => {
       // Create memory with tags
       await ragServer.handleMemorizeText({
-        text: 'Memory with tags',
+        text: 'Memory with tags - this string must be at least fifty characters long for chunking to work',
         label: 'tag-replace-test',
         tags: ['old-tag-1', 'old-tag-2'],
       })
@@ -997,7 +1013,7 @@ describe('Feature 5: Memory Update/Append Support', () => {
     it('should add tags to existing tags', async () => {
       // Create memory with tags
       await ragServer.handleMemorizeText({
-        text: 'Memory with tags',
+        text: 'Memory with tags - this string must be at least fifty characters long for chunking to work',
         label: 'tag-add-test',
         tags: ['existing-tag'],
       })
@@ -1023,7 +1039,7 @@ describe('Feature 5: Memory Update/Append Support', () => {
     it('should not add duplicate tags', async () => {
       // Create memory with tags
       await ragServer.handleMemorizeText({
-        text: 'Memory with tags',
+        text: 'Memory with tags - this string must be at least fifty characters long for chunking to work',
         label: 'tag-duplicate-test',
         tags: ['tag-1'],
       })
@@ -1050,7 +1066,7 @@ describe('Feature 5: Memory Update/Append Support', () => {
     it('should remove specified tags from existing tags', async () => {
       // Create memory with tags
       await ragServer.handleMemorizeText({
-        text: 'Memory with tags',
+        text: 'Memory with tags - this string must be at least fifty characters long for chunking to work',
         label: 'tag-remove-test',
         tags: ['tag-1', 'tag-2', 'tag-3'],
       })
@@ -1074,7 +1090,7 @@ describe('Feature 5: Memory Update/Append Support', () => {
     it('should ignore non-existent tags when removing', async () => {
       // Create memory with tags
       await ragServer.handleMemorizeText({
-        text: 'Memory with tags',
+        text: 'Memory with tags - this string must be at least fifty characters long for chunking to work',
         label: 'tag-remove-nonexistent-test',
         tags: ['tag-1', 'tag-2'],
       })
@@ -1102,7 +1118,7 @@ describe('Feature 5: Memory Update/Append Support', () => {
         ragServer.handleUpdateMemory({
           label: 'non-existent-memory',
           mode: 'replace',
-          text: 'New content',
+          text: 'New content for replacement - this string must be at least fifty characters for chunking',
         })
       ).rejects.toThrow()
     })
@@ -1111,7 +1127,7 @@ describe('Feature 5: Memory Update/Append Support', () => {
       await expect(
         ragServer.handleUpdateMemory({
           label: '',
-          text: 'New content',
+          text: 'New content for replacement - this string must be at least fifty characters for chunking',
         })
       ).rejects.toThrow()
     })
@@ -1121,7 +1137,7 @@ describe('Feature 5: Memory Update/Append Support', () => {
     it('should update updatedAt timestamp on update', async () => {
       // Create memory
       await ragServer.handleMemorizeText({
-        text: 'Original content',
+        text: 'Original content - this string must be at least fifty characters long for chunking to work',
         label: 'timestamp-update-test',
       })
 
@@ -1139,7 +1155,7 @@ describe('Feature 5: Memory Update/Append Support', () => {
       await ragServer.handleUpdateMemory({
         label: 'timestamp-update-test',
         mode: 'append',
-        text: ' Updated content',
+        text: 'Updated content - this string must be at least fifty characters for chunking to work',
       })
 
       const filesAfter = await ragServer.handleListFiles()
@@ -1157,7 +1173,7 @@ describe('Feature 5: Memory Update/Append Support', () => {
     it('should keep createdAt unchanged on update', async () => {
       // Create memory
       await ragServer.handleMemorizeText({
-        text: 'Original content',
+        text: 'Original content - this string must be at least fifty characters long for chunking to work',
         label: 'created-at-unchanged-test',
       })
 
@@ -1171,7 +1187,7 @@ describe('Feature 5: Memory Update/Append Support', () => {
       // Update memory
       await ragServer.handleUpdateMemory({
         label: 'created-at-unchanged-test',
-        text: 'Updated content',
+        text: 'Updated content - this string must be at least fifty characters long for chunking work',
       })
 
       const filesAfter = await ragServer.handleListFiles()
@@ -1219,7 +1235,7 @@ describe('Feature 6: Project Context Association', () => {
   describe('Explicit project association', () => {
     it('should accept project parameter in memorize_text', async () => {
       const result = await ragServer.handleMemorizeText({
-        text: 'Project-specific memory',
+        text: 'Project-specific memory - this string must be at least fifty characters for chunking test',
         label: 'project-memory-1',
         project: 'my-app',
       })
@@ -1236,7 +1252,10 @@ describe('Feature 6: Project Context Association', () => {
 
     it('should accept project parameter in ingest_file', async () => {
       const testFile = resolve(testDataDir, 'project-file.txt')
-      writeFileSync(testFile, 'File for specific project')
+      writeFileSync(
+        testFile,
+        'File for specific project - this content must be at least fifty characters long for chunking'
+      )
 
       const result = await ragServer.handleIngestFile({
         filePath: testFile,
@@ -1255,7 +1274,7 @@ describe('Feature 6: Project Context Association', () => {
   describe('Global flag overrides project', () => {
     it('should create global memory when global=true', async () => {
       const result = await ragServer.handleMemorizeText({
-        text: 'Global memory',
+        text: 'Global memory - this string must be at least fifty characters long for chunking to work here',
         label: 'global-memory',
         project: 'my-app',
         global: true,
@@ -1274,7 +1293,10 @@ describe('Feature 6: Project Context Association', () => {
 
     it('should create global file when global=true', async () => {
       const testFile = resolve(testDataDir, 'global-file.txt')
-      writeFileSync(testFile, 'Global file content')
+      writeFileSync(
+        testFile,
+        'Global file content - this content must be at least fifty characters long for chunking to work'
+      )
 
       const result = await ragServer.handleIngestFile({
         filePath: testFile,
@@ -1294,7 +1316,7 @@ describe('Feature 6: Project Context Association', () => {
   describe('Default behavior (no project)', () => {
     it('should create global memory by default', async () => {
       const result = await ragServer.handleMemorizeText({
-        text: 'Default memory',
+        text: 'Default memory - this string must be at least fifty characters long for chunking to work',
         label: 'default-memory',
       })
 
@@ -1313,13 +1335,13 @@ describe('Feature 6: Project Context Association', () => {
     it('should filter by project in list_files', async () => {
       // Create memories for different projects
       await ragServer.handleMemorizeText({
-        text: 'Project A memory',
+        text: 'Project A memory - this string must be at least fifty characters for chunking to work',
         label: 'project-a-mem',
         project: 'project-a',
       })
 
       await ragServer.handleMemorizeText({
-        text: 'Project B memory',
+        text: 'Project B memory - this string must be at least fifty characters for chunking to work',
         label: 'project-b-mem',
         project: 'project-b',
       })
@@ -1339,13 +1361,13 @@ describe('Feature 6: Project Context Association', () => {
     it('should filter by project in query_documents', async () => {
       // Create project-specific memories
       await ragServer.handleMemorizeText({
-        text: 'Project X documentation about APIs',
+        text: 'Project X documentation about APIs - this string must be at least fifty characters',
         label: 'project-x-docs',
         project: 'project-x',
       })
 
       await ragServer.handleMemorizeText({
-        text: 'Project Y documentation about APIs',
+        text: 'Project Y documentation about APIs - this string must be at least fifty characters',
         label: 'project-y-docs',
         project: 'project-y',
       })
@@ -1660,7 +1682,7 @@ describe('Backward Compatibility', () => {
 
   it('should work with old memorize_text calls (no new parameters)', async () => {
     const result = await ragServer.handleMemorizeText({
-      text: 'Old-style memory',
+      text: 'Old-style memory - this string must be at least fifty characters long for chunking work test',
       label: 'old-style',
     })
 
@@ -1671,7 +1693,10 @@ describe('Backward Compatibility', () => {
 
   it('should work with old ingest_file calls (no new parameters)', async () => {
     const testFile = resolve(testDataDir, 'old-style-file.txt')
-    writeFileSync(testFile, 'Old-style file content')
+    writeFileSync(
+      testFile,
+      'Old-style file content - this content must be at least fifty characters long for chunking'
+    )
 
     const result = await ragServer.handleIngestFile({
       filePath: testFile,
@@ -1745,7 +1770,7 @@ describe('Input Validation', () => {
     it('should reject non-array tags', async () => {
       await expect(
         ragServer.handleMemorizeText({
-          text: 'Test',
+          text: 'Test content - this string must be at least fifty characters long for chunking to work here',
           label: 'invalid-tags',
           tags: 'not-an-array' as any,
         })
@@ -1755,7 +1780,7 @@ describe('Input Validation', () => {
     it('should reject tags with non-string elements', async () => {
       await expect(
         ragServer.handleMemorizeText({
-          text: 'Test',
+          text: 'Test content - this string must be at least fifty characters long for chunking to work here',
           label: 'invalid-tag-elements',
           tags: [123, {}, null] as any,
         })
@@ -1765,7 +1790,7 @@ describe('Input Validation', () => {
     it('should reject empty string tags', async () => {
       await expect(
         ragServer.handleMemorizeText({
-          text: 'Test',
+          text: 'Test content - this string must be at least fifty characters long for chunking to work here',
           label: 'empty-string-tag',
           tags: ['valid-tag', '', 'another-tag'],
         })
@@ -1777,7 +1802,7 @@ describe('Input Validation', () => {
     it('should reject invalid type values', async () => {
       await expect(
         ragServer.handleMemorizeText({
-          text: 'Test',
+          text: 'Test content - this string must be at least fifty characters long for chunking to work here',
           label: 'invalid-type',
           type: 'invalid' as any,
         })
@@ -1789,7 +1814,7 @@ describe('Input Validation', () => {
 
       for (const type of validTypes) {
         const result = await ragServer.handleMemorizeText({
-          text: 'Test',
+          text: 'Test content - this string must be at least fifty characters long for chunking to work here',
           label: `valid-type-${type}`,
           type: type as 'memory' | 'lesson' | 'note',
         })
@@ -1805,7 +1830,7 @@ describe('Input Validation', () => {
       for (const ttl of invalidTTLs) {
         await expect(
           ragServer.handleMemorizeText({
-            text: 'Test',
+            text: 'Test content - this string must be at least fifty characters long for chunking to work here',
             label: `invalid-ttl-${ttl}`,
             ttl: ttl as any,
           })
@@ -1818,7 +1843,7 @@ describe('Input Validation', () => {
 
       for (const ttl of validTTLs) {
         const result = await ragServer.handleMemorizeText({
-          text: 'Test',
+          text: 'Test content - this string must be at least fifty characters long for chunking to work here',
           label: `valid-ttl-${ttl}`,
           ttl: ttl as any,
         })
@@ -1831,7 +1856,7 @@ describe('Input Validation', () => {
     it('should reject invalid mode values', async () => {
       // Create memory first
       await ragServer.handleMemorizeText({
-        text: 'Original',
+        text: 'Original content for update - this string must be at least fifty characters for chunk',
         label: 'mode-test',
       })
 
@@ -1849,7 +1874,7 @@ describe('Input Validation', () => {
 
       for (const mode of validModes) {
         await ragServer.handleMemorizeText({
-          text: 'Original',
+          text: 'Original content for update - this string must be at least fifty characters for chunk',
           label: `mode-${mode}`,
         })
 
