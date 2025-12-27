@@ -644,13 +644,15 @@ export class VectorStore {
       queryText?: string
       /** Maximum number of results (default 10, max 20) */
       limit?: number
+      /** Number of results to skip for pagination (default 0) */
+      offset?: number
       /** Filter by type: 'all', 'file', or 'memory' */
       type?: 'all' | 'file' | 'memory'
       /** Filter by tags (AND logic - must have all specified tags) */
       tags?: string[]
       /** Filter by project identifier */
       project?: string
-      /** Maximum distance threshold (lower is more similar) */
+      /** Minimum similarity score threshold (0-1, higher is more similar) */
       minScore?: number
     }
   ): Promise<SearchResult[]> {
@@ -660,9 +662,16 @@ export class VectorStore {
     }
 
     const limit = options?.limit ?? 10
+    const offset = options?.offset ?? 0
     if (limit < 1 || limit > 20) {
       throw new DatabaseError(`Invalid limit: expected 1-20, got ${limit}`)
     }
+    if (offset < 0) {
+      throw new DatabaseError(`Invalid offset: expected >= 0, got ${offset}`)
+    }
+
+    // Calculate how many results we need to fetch to satisfy offset + limit
+    const totalNeeded = offset + limit
 
     try {
       let rawResults: Record<string, unknown>[]
@@ -672,8 +681,8 @@ export class VectorStore {
       const hybridWeight = this.config.hybridWeight ?? 0.6
       if (this.ftsEnabled && queryText && queryText.trim().length > 0 && hybridWeight > 0) {
         try {
-          // Get more candidates for filtering and reranking
-          const candidateLimit = limit * HYBRID_SEARCH_CANDIDATE_MULTIPLIER * 2
+          // Get more candidates for filtering and reranking (account for offset)
+          const candidateLimit = totalNeeded * HYBRID_SEARCH_CANDIDATE_MULTIPLIER * 2
 
           // Hybrid search: combine FTS (BM25) and vector search
           const ftsResults = await this.table
@@ -699,18 +708,18 @@ export class VectorStore {
           let query = this.table
             .vectorSearch(queryVector)
             .distanceType('dot')
-            .limit(limit * 3)
+            .limit(totalNeeded * 3)
           if (this.config.maxDistance !== undefined) {
             query = query.distanceRange(undefined, this.config.maxDistance)
           }
           rawResults = await query.toArray()
         }
       } else {
-        // Vector-only search - get extra candidates for filtering
+        // Vector-only search - get extra candidates for filtering (account for offset)
         let query = this.table
           .vectorSearch(queryVector)
           .distanceType('dot')
-          .limit(limit * 3)
+          .limit(totalNeeded * 3)
 
         // Apply distance threshold if configured
         if (this.config.maxDistance !== undefined) {
@@ -751,9 +760,12 @@ export class VectorStore {
           searchResults = searchResults.filter((r) => r.metadata.project === options.project)
         }
 
-        // Filter by minimum score (distance-based: lower is better, so <= for filtering)
+        // Filter by minimum similarity score (convert from similarity 0-1 to distance threshold)
+        // similarity = 1 - (distance / DOT_PRODUCT_MAX_DISTANCE)
+        // minScore <= similarity means distance <= (1 - minScore) * DOT_PRODUCT_MAX_DISTANCE
         if (options.minScore !== undefined) {
-          searchResults = searchResults.filter((r) => r.score <= options.minScore!)
+          const maxDistance = (1 - options.minScore) * DOT_PRODUCT_MAX_DISTANCE
+          searchResults = searchResults.filter((r) => r.score <= maxDistance)
         }
       }
 
@@ -762,8 +774,9 @@ export class VectorStore {
         searchResults = this.applyGrouping(searchResults, this.config.grouping)
       }
 
-      // Return up to limit results
-      return searchResults.slice(0, limit)
+      // Apply offset and limit for pagination
+      // Note: offset variable was already declared at the top of this method
+      return searchResults.slice(offset, offset + limit)
     } catch (error) {
       throw new DatabaseError('Failed to search vectors', error as Error)
     }
@@ -820,7 +833,7 @@ export class VectorStore {
       .slice(0, limit)
       .map((item) => ({
         ...item.result,
-        _distance: 1 - item.score, // Convert back to distance for consistency
+        _distance: (1 - item.score) * DOT_PRODUCT_MAX_DISTANCE, // Normalize to 0-2 scale like vector search
       }))
 
     return sortedResults

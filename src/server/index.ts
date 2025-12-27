@@ -47,6 +47,8 @@ export interface QueryDocumentsInput {
   query: string
   /** Number of results to retrieve (default 10) */
   limit?: number
+  /** Number of results to skip for pagination (default 0) */
+  offset?: number
   /** Filter by entry type */
   type?: 'all' | 'file' | 'memory'
   /** Filter by tags */
@@ -333,9 +335,9 @@ function validateTypeFilter(type: unknown): ValidTypeFilter | undefined {
 }
 
 /**
- * Validate minScore parameter
+ * Validate minScore parameter (similarity score threshold)
  *
- * @param minScore - Minimum score to validate
+ * @param minScore - Minimum similarity score to validate (0-1 range)
  * @throws Error if minScore is invalid
  */
 function validateMinScore(minScore: unknown): number | undefined {
@@ -351,11 +353,128 @@ function validateMinScore(minScore: unknown): number | undefined {
     throw new Error('minScore cannot be negative')
   }
 
-  if (minScore > 2) {
-    throw new Error('minScore must be <= 2 (LanceDB uses L2 distance, typical values are 0-2)')
+  if (minScore > 1) {
+    throw new Error('minScore must be <= 1 (similarity score range is 0-1)')
   }
 
   return minScore
+}
+
+/**
+ * Validate offset parameter for pagination
+ *
+ * @param offset - Offset value to validate
+ * @throws Error if offset is invalid
+ */
+function validateOffset(offset: unknown): number {
+  if (offset === undefined || offset === null) {
+    return 0
+  }
+
+  if (typeof offset !== 'number') {
+    throw new Error('offset must be a number')
+  }
+
+  if (!Number.isFinite(offset)) {
+    throw new Error('offset must be a finite number')
+  }
+
+  if (!Number.isInteger(offset)) {
+    throw new Error('offset must be an integer')
+  }
+
+  if (offset < 0) {
+    throw new Error('offset cannot be negative')
+  }
+
+  if (offset > 1000) {
+    throw new Error('offset cannot exceed 1000')
+  }
+
+  return offset
+}
+
+/**
+ * Validate limit parameter for queries
+ *
+ * @param limit - Limit value to validate
+ * @throws Error if limit is invalid
+ */
+function validateLimit(limit: unknown): number {
+  if (limit === undefined || limit === null) {
+    return 10 // Default
+  }
+
+  if (typeof limit !== 'number') {
+    throw new Error('limit must be a number')
+  }
+
+  if (!Number.isFinite(limit)) {
+    throw new Error('limit must be a finite number')
+  }
+
+  if (!Number.isInteger(limit)) {
+    throw new Error('limit must be an integer')
+  }
+
+  if (limit < 1) {
+    throw new Error('limit must be at least 1')
+  }
+
+  if (limit > 20) {
+    throw new Error('limit cannot exceed 20')
+  }
+
+  return limit
+}
+
+// Memory label validation constants
+const MEMORY_PREFIX = 'memory://'
+const MEMORY_LABEL_REGEX = /^[\w.-]+$/
+const MEMORY_LABEL_MAX_LENGTH = 256
+
+/**
+ * Validate memory label format
+ *
+ * @param label - Memory label to validate (without memory:// prefix)
+ * @throws Error if label is invalid
+ */
+function validateMemoryLabel(label: string): void {
+  if (!label || label.length === 0) {
+    throw new Error('Memory label cannot be empty')
+  }
+
+  if (label.length > MEMORY_LABEL_MAX_LENGTH) {
+    throw new Error(`Memory label cannot exceed ${MEMORY_LABEL_MAX_LENGTH} characters`)
+  }
+
+  if (!MEMORY_LABEL_REGEX.test(label)) {
+    throw new Error(
+      'Invalid memory label: must contain only alphanumeric characters, hyphens, underscores, and dots'
+    )
+  }
+
+  // Prevent labels that are only dots (potential path traversal)
+  if (/^\.+$/.test(label)) {
+    throw new Error('Invalid memory label: cannot be only dots')
+  }
+}
+
+/**
+ * Extract and validate memory label from a memory:// path
+ *
+ * @param filePath - Full memory path (e.g., "memory://my-label")
+ * @returns The validated label
+ * @throws Error if path is not a valid memory path or label is invalid
+ */
+function extractAndValidateMemoryLabel(filePath: string): string {
+  if (!filePath.startsWith(MEMORY_PREFIX)) {
+    throw new Error(`Invalid memory path: must start with ${MEMORY_PREFIX}`)
+  }
+
+  const label = filePath.substring(MEMORY_PREFIX.length)
+  validateMemoryLabel(label)
+  return label
 }
 
 // ============================================
@@ -430,7 +549,12 @@ export class RAGServer {
               limit: {
                 type: 'number',
                 description:
-                  'Maximum number of results to return (default: 10). Recommended: 5 for precision, 10 for balance, 20 for broad exploration.',
+                  'Maximum number of results to return (default: 10). Recommended: 5 for precision, 10 for balance, 20 for broad exploration. Must be an integer between 1-20.',
+              },
+              offset: {
+                type: 'number',
+                description:
+                  'Number of results to skip for pagination (default: 0). Must be an integer between 0-1000. Use with limit to paginate through results.',
               },
               type: {
                 type: 'string',
@@ -487,14 +611,14 @@ export class RAGServer {
         {
           name: 'delete_file',
           description:
-            'Delete a previously ingested file from the vector database. Removes all chunks and embeddings associated with the specified file. File path must be an absolute path. This operation is idempotent - deleting a non-existent file completes without error.',
+            'Delete a previously ingested file or memory from the vector database. Removes all chunks and embeddings associated with the specified file. File path must be an absolute path, or a memory:// path for memories. This operation is idempotent - deleting a non-existent file completes without error.',
           inputSchema: {
             type: 'object',
             properties: {
               filePath: {
                 type: 'string',
                 description:
-                  'Absolute path to the file to delete from the database. Example: "/Users/user/documents/manual.pdf"',
+                  'Absolute path to the file to delete from the database. Example: "/Users/user/documents/manual.pdf". For memories, use "memory://<label>" format (e.g., "memory://my-snippet").',
               },
             },
             required: ['filePath'],
@@ -513,7 +637,8 @@ export class RAGServer {
               },
               label: {
                 type: 'string',
-                description: 'Optional label for snippet (default: "snippet-<timestamp>")',
+                description:
+                  'Optional label for snippet (default: "snippet-<timestamp>"). Must contain only alphanumeric characters, hyphens, underscores, and dots.',
               },
               language: {
                 type: 'string',
@@ -694,6 +819,8 @@ export class RAGServer {
       const validatedType = validateTypeFilter(args.type)
       const validatedTags = validateTags(args.tags)
       const validatedMinScore = validateMinScore(args.minScore)
+      const validatedLimit = validateLimit(args.limit)
+      const validatedOffset = validateOffset(args.offset)
 
       // Generate query embedding
       const queryVector = await this.embedder.embed(args.query)
@@ -702,13 +829,15 @@ export class RAGServer {
       const searchOptions: {
         queryText?: string
         limit?: number
+        offset?: number
         type?: 'all' | 'file' | 'memory'
         tags?: string[]
         project?: string
         minScore?: number
       } = {
         queryText: args.query, // Enable hybrid BM25 + vector search
-        limit: args.limit || 10,
+        limit: validatedLimit,
+        offset: validatedOffset,
       }
       if (validatedType) searchOptions.type = validatedType
       if (validatedTags.length > 0) searchOptions.tags = validatedTags
@@ -937,8 +1066,15 @@ export class RAGServer {
     args: DeleteFileInput
   ): Promise<{ content: [{ type: 'text'; text: string }] }> {
     try {
-      // Validate and normalize file path (S-002 security requirement)
-      this.parser.validateFilePath(args.filePath)
+      // Handle memory:// paths differently - they don't need file system validation
+      // but still need SQL injection protection (handled by vectorStore.deleteChunks)
+      if (args.filePath.startsWith(MEMORY_PREFIX)) {
+        // Use centralized validation for memory labels
+        extractAndValidateMemoryLabel(args.filePath)
+      } else {
+        // Validate and normalize file path (S-002 security requirement)
+        this.parser.validateFilePath(args.filePath)
+      }
 
       // Delete chunks from vector database
       await this.vectorStore.deleteChunks(args.filePath)
@@ -985,8 +1121,12 @@ export class RAGServer {
       const validatedType = validateMemoryType(args.type)
 
       // Generate label and synthetic path
+      // If user provides a custom label, validate it to ensure it can be deleted later
       const label = args.label || `snippet-${Date.now()}`
-      const syntheticFilePath = `memory://${label}`
+      if (args.label) {
+        validateMemoryLabel(args.label)
+      }
+      const syntheticFilePath = `${MEMORY_PREFIX}${label}`
 
       // Chunk text
       const chunks = await this.chunker.chunkText(args.text)
@@ -1103,6 +1243,7 @@ export class RAGServer {
   ): Promise<{ content: [{ type: 'text'; text: string }] }> {
     try {
       // Validate inputs
+      validateMemoryLabel(args.label) // Validate label format
       const validatedMode = validateUpdateMode(args.mode)
       const validatedTags = args.tags !== undefined ? validateTags(args.tags) : undefined
       const validatedAddTags = args.addTags !== undefined ? validateTags(args.addTags) : undefined

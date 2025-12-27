@@ -1565,11 +1565,12 @@ describe('Feature 7: Enhanced Query Tool (query_documents enhancement)', () => {
 
       const results = JSON.parse(result.content[0].text)
 
-      // All results should have score >= minScore
-      // Note: LanceDB uses distance (lower is better), so we need to check <= for distance
+      // All results should have similarity >= minScore (0.5)
+      // Since score is distance: similarity = 1 - (distance / 2)
+      // minScore 0.5 means maxDistance = (1 - 0.5) * 2 = 1.0
       expect(
         results.every(
-          (r: { score: number }) => r.score <= 0.5 // Assuming lower score means more similar in LanceDB
+          (r: { score: number }) => r.score <= 1.0 // score is distance, so <= maxDistance
         )
       ).toBe(true)
     })
@@ -1577,7 +1578,7 @@ describe('Feature 7: Enhanced Query Tool (query_documents enhancement)', () => {
     it('should return empty array when minScore too high', async () => {
       const result = await ragServer.handleQueryDocuments({
         query: 'completely unrelated xyz123',
-        minScore: 0.01, // Very strict threshold
+        minScore: 0.99, // Very strict: require 99% similarity (maxDistance = 0.02)
         limit: 10,
       })
 
@@ -1732,6 +1733,202 @@ describe('Backward Compatibility', () => {
 
     // Should not crash on entries without new fields
     expect(files.length).toBeGreaterThan(0)
+  })
+})
+
+// ============================================
+// Test Suite: Bug Fix - delete_file with memory:// paths
+// ============================================
+
+describe('Bug Fix: delete_file with memory:// paths', () => {
+  let ragServer: RAGServer
+  const testDbPath = resolve('./tmp/test-delete-memory-db')
+  const testDataDir = resolve('./tmp/test-delete-memory-data')
+
+  beforeAll(async () => {
+    mkdirSync(testDbPath, { recursive: true })
+    mkdirSync(testDataDir, { recursive: true })
+
+    ragServer = new RAGServer({
+      dbPath: testDbPath,
+      modelName: 'Xenova/all-MiniLM-L6-v2',
+      cacheDir: './tmp/models',
+      baseDir: testDataDir,
+      maxFileSize: 100 * 1024 * 1024,
+      chunkSize: 512,
+      chunkOverlap: 100,
+    })
+
+    await ragServer.initialize()
+  })
+
+  afterAll(async () => {
+    rmSync(testDbPath, { recursive: true, force: true })
+    rmSync(testDataDir, { recursive: true, force: true })
+  })
+
+  it('should delete memory using memory:// path syntax', async () => {
+    // Create a memory
+    await ragServer.handleMemorizeText({
+      text: 'Test memory for deletion - this string must be at least fifty characters for chunking',
+      label: 'test-delete-me',
+    })
+
+    // Verify it exists
+    const filesBefore = await ragServer.handleListFiles({ type: 'memory' })
+    const listBefore = JSON.parse(filesBefore.content[0].text)
+    expect(
+      listBefore.some((f: { filePath: string }) => f.filePath === 'memory://test-delete-me')
+    ).toBe(true)
+
+    // Delete using memory:// path
+    const result = await ragServer.handleDeleteFile({ filePath: 'memory://test-delete-me' })
+    const parsed = JSON.parse(result.content[0].text)
+    expect(parsed.deleted).toBe(true)
+
+    // Verify it's gone
+    const filesAfter = await ragServer.handleListFiles({ type: 'memory' })
+    const listAfter = JSON.parse(filesAfter.content[0].text)
+    expect(
+      listAfter.some((f: { filePath: string }) => f.filePath === 'memory://test-delete-me')
+    ).toBe(false)
+  })
+
+  it('should reject invalid memory label characters', async () => {
+    await expect(
+      ragServer.handleDeleteFile({ filePath: 'memory://invalid;label' })
+    ).rejects.toThrow('Invalid memory label')
+
+    await expect(
+      ragServer.handleDeleteFile({ filePath: "memory://label'injection" })
+    ).rejects.toThrow('Invalid memory label')
+  })
+
+  it('should accept valid memory labels with hyphens, underscores, and dots', async () => {
+    // Create memory with special characters in label
+    await ragServer.handleMemorizeText({
+      text: 'Test memory with special label chars - this string must be at least fifty characters',
+      label: 'test-label_with.dots',
+    })
+
+    // Should be able to delete it
+    const result = await ragServer.handleDeleteFile({ filePath: 'memory://test-label_with.dots' })
+    expect(result).toBeDefined()
+    const parsed = JSON.parse(result.content[0].text)
+    expect(parsed.deleted).toBe(true)
+  })
+})
+
+// ============================================
+// Test Suite: Bug Fix - offset pagination
+// ============================================
+
+describe('Bug Fix: offset pagination in query_documents', () => {
+  let ragServer: RAGServer
+  const testDbPath = resolve('./tmp/test-offset-db')
+  const testDataDir = resolve('./tmp/test-offset-data')
+
+  beforeAll(async () => {
+    mkdirSync(testDbPath, { recursive: true })
+    mkdirSync(testDataDir, { recursive: true })
+
+    ragServer = new RAGServer({
+      dbPath: testDbPath,
+      modelName: 'Xenova/all-MiniLM-L6-v2',
+      cacheDir: './tmp/models',
+      baseDir: testDataDir,
+      maxFileSize: 100 * 1024 * 1024,
+      chunkSize: 512,
+      chunkOverlap: 100,
+    })
+
+    await ragServer.initialize()
+
+    // Create multiple memories to test pagination
+    for (let i = 1; i <= 10; i++) {
+      await ragServer.handleMemorizeText({
+        text: `Test memory number ${i} about pagination testing. This content has unique identifier ${i} for testing purposes with enough characters.`,
+        label: `pagination-test-${i}`,
+        tags: ['pagination-test'],
+      })
+    }
+  })
+
+  afterAll(async () => {
+    rmSync(testDbPath, { recursive: true, force: true })
+    rmSync(testDataDir, { recursive: true, force: true })
+  })
+
+  it('should return first page of results with offset=0', async () => {
+    const result = await ragServer.handleQueryDocuments({
+      query: 'pagination testing',
+      limit: 3,
+      tags: ['pagination-test'],
+    })
+
+    const results = JSON.parse(result.content[0].text)
+    expect(results.length).toBe(3)
+  })
+
+  it('should return different results with different offset values', async () => {
+    // Get first page
+    const page1Result = await ragServer.handleQueryDocuments({
+      query: 'pagination testing',
+      limit: 3,
+      tags: ['pagination-test'],
+    })
+    const page1 = JSON.parse(page1Result.content[0].text)
+
+    // Get second page with offset
+    const page2Result = await ragServer.handleQueryDocuments({
+      query: 'pagination testing',
+      limit: 3,
+      offset: 3,
+      tags: ['pagination-test'],
+    })
+    const page2 = JSON.parse(page2Result.content[0].text)
+
+    // Results should be different
+    const page1Paths = page1.map((r: { filePath: string }) => r.filePath)
+    const page2Paths = page2.map((r: { filePath: string }) => r.filePath)
+
+    // No overlap between pages
+    const overlap = page1Paths.filter((p: string) => page2Paths.includes(p))
+    expect(overlap.length).toBe(0)
+  })
+
+  it('should return empty array when offset exceeds total results', async () => {
+    const result = await ragServer.handleQueryDocuments({
+      query: 'pagination testing',
+      limit: 3,
+      offset: 100,
+      tags: ['pagination-test'],
+    })
+
+    const results = JSON.parse(result.content[0].text)
+    expect(results.length).toBe(0)
+  })
+
+  it('should work with offset=0 same as without offset', async () => {
+    const withoutOffset = await ragServer.handleQueryDocuments({
+      query: 'pagination testing',
+      limit: 5,
+      tags: ['pagination-test'],
+    })
+
+    const withOffset = await ragServer.handleQueryDocuments({
+      query: 'pagination testing',
+      limit: 5,
+      offset: 0,
+      tags: ['pagination-test'],
+    })
+
+    const results1 = JSON.parse(withoutOffset.content[0].text)
+    const results2 = JSON.parse(withOffset.content[0].text)
+
+    expect(results1.map((r: { filePath: string }) => r.filePath)).toEqual(
+      results2.map((r: { filePath: string }) => r.filePath)
+    )
   })
 })
 
@@ -1907,13 +2104,183 @@ describe('Input Validation', () => {
         })
       ).rejects.toThrow('minScore cannot be negative')
 
-      // Scores above 2 should be rejected (LanceDB uses L2 distance, typical range 0-2)
+      // Scores above 1 should be rejected (similarity score range is 0-1)
       await expect(
         ragServer.handleQueryDocuments({
           query: 'test',
-          minScore: 2.5,
+          minScore: 1.5,
         })
-      ).rejects.toThrow('minScore must be <= 2')
+      ).rejects.toThrow('minScore must be <= 1')
+    })
+  })
+
+  describe('Offset validation', () => {
+    it('should reject negative offset', async () => {
+      await expect(
+        ragServer.handleQueryDocuments({
+          query: 'test',
+          offset: -1,
+        })
+      ).rejects.toThrow('offset cannot be negative')
+    })
+
+    it('should reject non-integer offset', async () => {
+      await expect(
+        ragServer.handleQueryDocuments({
+          query: 'test',
+          offset: 0.5,
+        })
+      ).rejects.toThrow('offset must be an integer')
+    })
+
+    it('should reject NaN offset', async () => {
+      await expect(
+        ragServer.handleQueryDocuments({
+          query: 'test',
+          offset: Number.NaN,
+        })
+      ).rejects.toThrow('offset must be a finite number')
+    })
+
+    it('should reject Infinity offset', async () => {
+      await expect(
+        ragServer.handleQueryDocuments({
+          query: 'test',
+          offset: Number.POSITIVE_INFINITY,
+        })
+      ).rejects.toThrow('offset must be a finite number')
+    })
+
+    it('should reject offset exceeding maximum (1000)', async () => {
+      await expect(
+        ragServer.handleQueryDocuments({
+          query: 'test',
+          offset: 1001,
+        })
+      ).rejects.toThrow('offset cannot exceed 1000')
+    })
+
+    it('should accept valid offset values', async () => {
+      // Should not throw for valid values
+      const result = await ragServer.handleQueryDocuments({
+        query: 'test',
+        offset: 0,
+        limit: 5,
+      })
+      expect(result).toBeDefined()
+    })
+  })
+
+  describe('Limit validation', () => {
+    it('should reject limit = 0', async () => {
+      await expect(
+        ragServer.handleQueryDocuments({
+          query: 'test',
+          limit: 0,
+        })
+      ).rejects.toThrow('limit must be at least 1')
+    })
+
+    it('should reject limit > 20', async () => {
+      await expect(
+        ragServer.handleQueryDocuments({
+          query: 'test',
+          limit: 21,
+        })
+      ).rejects.toThrow('limit cannot exceed 20')
+    })
+
+    it('should reject non-integer limit', async () => {
+      await expect(
+        ragServer.handleQueryDocuments({
+          query: 'test',
+          limit: 5.5,
+        })
+      ).rejects.toThrow('limit must be an integer')
+    })
+
+    it('should reject NaN limit', async () => {
+      await expect(
+        ragServer.handleQueryDocuments({
+          query: 'test',
+          limit: Number.NaN,
+        })
+      ).rejects.toThrow('limit must be a finite number')
+    })
+
+    it('should accept valid limit values', async () => {
+      const result = await ragServer.handleQueryDocuments({
+        query: 'test',
+        limit: 10,
+      })
+      expect(result).toBeDefined()
+    })
+  })
+
+  describe('Memory label validation', () => {
+    it('should reject empty memory label', async () => {
+      await expect(ragServer.handleDeleteFile({ filePath: 'memory://' })).rejects.toThrow(
+        'Memory label cannot be empty'
+      )
+    })
+
+    it('should reject label that is only dots', async () => {
+      await expect(ragServer.handleDeleteFile({ filePath: 'memory://..' })).rejects.toThrow(
+        'Invalid memory label: cannot be only dots'
+      )
+
+      await expect(ragServer.handleDeleteFile({ filePath: 'memory://...' })).rejects.toThrow(
+        'Invalid memory label: cannot be only dots'
+      )
+    })
+
+    it('should reject labels with newlines', async () => {
+      await expect(
+        ragServer.handleDeleteFile({ filePath: 'memory://label\ninjection' })
+      ).rejects.toThrow('Invalid memory label')
+    })
+
+    it('should reject labels with spaces', async () => {
+      await expect(
+        ragServer.handleDeleteFile({ filePath: 'memory://label with spaces' })
+      ).rejects.toThrow('Invalid memory label')
+    })
+
+    it('should reject labels exceeding max length', async () => {
+      const longLabel = 'a'.repeat(257)
+      await expect(
+        ragServer.handleDeleteFile({ filePath: `memory://${longLabel}` })
+      ).rejects.toThrow('Memory label cannot exceed 256 characters')
+    })
+
+    it('should reject invalid label in memorize_text', async () => {
+      await expect(
+        ragServer.handleMemorizeText({
+          text: 'Test content - this string must be at least fifty characters long for chunking to work',
+          label: 'invalid label with spaces',
+        })
+      ).rejects.toThrow('Invalid memory label')
+    })
+
+    it('should reject invalid label in update_memory', async () => {
+      await expect(
+        ragServer.handleUpdateMemory({
+          label: 'invalid;label',
+          text: 'New content',
+        })
+      ).rejects.toThrow('Invalid memory label')
+    })
+
+    it('should accept valid labels with hyphens, underscores, and dots', async () => {
+      // Create memory
+      await ragServer.handleMemorizeText({
+        text: 'Test memory with valid label - this string must be at least fifty characters for chunking',
+        label: 'valid-label_123.test',
+      })
+
+      // Should be able to delete it
+      const result = await ragServer.handleDeleteFile({ filePath: 'memory://valid-label_123.test' })
+      expect(result).toBeDefined()
     })
   })
 })

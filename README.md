@@ -164,7 +164,7 @@ Re-ingesting the same file replaces the old version automatically.
 
 The hybrid search combines keyword matching (BM25) with semantic search. This means `useEffect` finds documents containing that exact term, not just semantically similar React concepts.
 
-Results include text content, source file, and relevance score. Adjust result count with `limit` (1-20, default 10).
+Results include text content, source file, and relevance score. Adjust result count with `limit` (1-20, default 10). Use `offset` (0-1000) for pagination through large result sets.
 
 ### Managing Files
 
