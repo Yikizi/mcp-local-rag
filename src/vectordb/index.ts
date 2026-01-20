@@ -180,11 +180,18 @@ function validateFilePath(filePath: string): void {
  * - Transaction handling (atomicity of delete→insert)
  * - Metadata management
  */
+/** Expected vector dimension for the embedding model */
+const EXPECTED_VECTOR_DIMENSION = 384
+
+/** Maximum records to defragment without warning (memory safeguard) */
+const DEFRAGMENT_MAX_SAFE_RECORDS = 50000
+
 export class VectorStore {
   private db: Connection | null = null
   private table: Table | null = null
   private readonly config: VectorStoreConfig
   private ftsEnabled = false
+  private isDefragmenting = false
 
   constructor(config: VectorStoreConfig) {
     this.config = config
@@ -1096,6 +1103,158 @@ export class VectorStore {
       })
     } catch (error) {
       throw new DatabaseError(`Failed to get memory by label: ${label}`, error as Error)
+    }
+  }
+
+  /**
+   * Defragment the database by rebuilding the table with consolidated data and indices.
+   *
+   * LanceDB creates new data fragments on each insert, leading to index fragmentation.
+   * This method exports all data, drops the table, and recreates it with a single
+   * consolidated index for optimal query performance.
+   *
+   * WARNING: This is a blocking operation. Concurrent operations during defragmentation
+   * may fail. The operation loads all records into memory.
+   *
+   * @param options - Optional configuration
+   * @param options.force - If true, proceed even with large datasets (default: false)
+   * @returns Defragmentation statistics
+   */
+  async defragment(options?: { force?: boolean }): Promise<{
+    rowsBefore: number
+    rowsAfter: number
+    success: boolean
+    ftsEnabled: boolean
+  }> {
+    // Prevent concurrent defragmentation
+    if (this.isDefragmenting) {
+      throw new DatabaseError('Defragmentation already in progress')
+    }
+
+    if (!this.db) {
+      throw new DatabaseError('VectorStore is not initialized. Call initialize() first.')
+    }
+
+    if (!this.table) {
+      return { rowsBefore: 0, rowsAfter: 0, success: true, ftsEnabled: false }
+    }
+
+    this.isDefragmenting = true
+    console.error('VectorStore: Starting defragmentation...')
+
+    try {
+      // Read all existing data
+      const allRecords = await this.table.query().toArray()
+      const rowsBefore = allRecords.length
+      console.error(`VectorStore: Read ${rowsBefore} records for defragmentation`)
+
+      if (rowsBefore === 0) {
+        console.error('VectorStore: No data to defragment')
+        return { rowsBefore: 0, rowsAfter: 0, success: true, ftsEnabled: this.ftsEnabled }
+      }
+
+      // Memory safeguard: warn about large datasets
+      if (rowsBefore > DEFRAGMENT_MAX_SAFE_RECORDS && !options?.force) {
+        throw new DatabaseError(
+          `Dataset too large for safe defragmentation (${rowsBefore} records > ${DEFRAGMENT_MAX_SAFE_RECORDS}). Use force option to proceed, but ensure sufficient memory is available.`
+        )
+      }
+
+      // Normalize records (handle Arrow types)
+      const now = new Date().toISOString()
+      const normalizedRecords = allRecords.map((record, index) => {
+        const rawMetadata = record.metadata as Record<string, unknown>
+
+        // Normalize tags
+        let tags: string[] = []
+        const rawTags = rawMetadata['tags']
+        if (rawTags) {
+          if (Array.isArray(rawTags)) {
+            tags = [...rawTags] as string[]
+          } else if (typeof (rawTags as { toArray?: () => string[] }).toArray === 'function') {
+            tags = (rawTags as { toArray: () => string[] }).toArray()
+          }
+        }
+
+        // Normalize vector with validation
+        let vector: number[] = []
+        if (record.vector) {
+          if (Array.isArray(record.vector)) {
+            vector = [...record.vector] as number[]
+          } else if (record.vector instanceof Float32Array) {
+            vector = Array.from(record.vector)
+          } else if (
+            typeof (record.vector as { toArray?: () => number[] }).toArray === 'function'
+          ) {
+            vector = Array.from((record.vector as { toArray: () => number[] }).toArray())
+          } else if (typeof record.vector === 'object' && record.vector !== null) {
+            vector = Array.from(record.vector as Iterable<number>)
+          }
+        }
+
+        // Validate vector dimension
+        if (vector.length !== EXPECTED_VECTOR_DIMENSION) {
+          throw new DatabaseError(
+            `Invalid vector dimension at record ${index} (id: ${record.id}): ` +
+              `expected ${EXPECTED_VECTOR_DIMENSION}, got ${vector.length}`
+          )
+        }
+
+        return {
+          id: record.id as string,
+          filePath: record.filePath as string,
+          chunkIndex: record.chunkIndex as number,
+          text: record.text as string,
+          vector,
+          metadata: {
+            fileName: (rawMetadata['fileName'] as string) || 'unknown',
+            fileSize: (rawMetadata['fileSize'] as number) || 0,
+            fileType: (rawMetadata['fileType'] as string) || 'unknown',
+            language: (rawMetadata['language'] as string | null) || null,
+            memoryType: (rawMetadata['memoryType'] as string | null) || null,
+            tags,
+            project: (rawMetadata['project'] as string | null) || null,
+            expiresAt: (rawMetadata['expiresAt'] as string | null) || null,
+            createdAt:
+              (rawMetadata['createdAt'] as string | null) || (record.timestamp as string) || now,
+            updatedAt:
+              (rawMetadata['updatedAt'] as string | null) || (record.timestamp as string) || now,
+          },
+          timestamp: (record.timestamp as string) || now,
+        }
+      })
+
+      // Drop old table
+      console.error('VectorStore: Dropping old table...')
+      await this.db.dropTable(this.config.tableName)
+
+      // Create new table with all data at once (single fragment = single index)
+      console.error('VectorStore: Creating new consolidated table...')
+      const schema = this.getSchema()
+      this.table = await this.db.createTable(this.config.tableName, normalizedRecords, { schema })
+
+      // Create FTS index
+      console.error('VectorStore: Creating FTS index...')
+      this.ftsEnabled = false
+      await this.ensureFtsIndex()
+
+      const rowsAfter = await this.table.countRows()
+      console.error(`VectorStore: Defragmentation complete. Rows: ${rowsBefore} -> ${rowsAfter}`)
+
+      return {
+        rowsBefore,
+        rowsAfter,
+        success: rowsBefore === rowsAfter,
+        ftsEnabled: this.ftsEnabled,
+      }
+    } catch (error) {
+      console.error('VectorStore: Defragmentation failed:', error)
+      if (error instanceof DatabaseError) {
+        throw error
+      }
+      throw new DatabaseError('Failed to defragment database', error as Error)
+    } finally {
+      this.isDefragmenting = false
     }
   }
 

@@ -758,6 +758,12 @@ export class RAGServer {
             required: ['label'],
           },
         },
+        {
+          name: 'defragment',
+          description:
+            'Defragment the vector database to optimize query performance. LanceDB creates new data fragments on each insert, leading to index fragmentation over time. This operation rebuilds the table with consolidated data and a single optimized index. Run this periodically (e.g., after many inserts) or when queries become slow. The operation preserves all data.',
+          inputSchema: { type: 'object', properties: {} },
+        },
       ],
     }))
 
@@ -792,6 +798,8 @@ export class RAGServer {
             return await this.handleUpdateMemory(
               request.params.arguments as unknown as UpdateMemoryInput
             )
+          case 'defragment':
+            return await this.handleDefragment()
           default:
             throw new Error(`Unknown tool: ${request.params.name}`)
         }
@@ -1366,6 +1374,51 @@ export class RAGServer {
 
       console.error('Failed to update memory:', errorMessage)
       throw new Error(`Failed to update memory: ${errorMessage}`)
+    }
+  }
+
+  /**
+   * defragment tool handler
+   */
+  async handleDefragment(): Promise<{ content: [{ type: 'text'; text: string }] }> {
+    try {
+      const result = await this.vectorStore.defragment()
+
+      let message: string
+      if (!result.success) {
+        message =
+          'Defragmentation completed with warnings: row count mismatch. Please verify data integrity.'
+      } else if (!result.ftsEnabled) {
+        message =
+          'Database defragmented successfully. Note: FTS index creation failed, using vector-only search.'
+      } else {
+        message = 'Database defragmented successfully. Query performance should be improved.'
+      }
+
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(
+              {
+                ...result,
+                message,
+                timestamp: new Date().toISOString(),
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      }
+    } catch (error) {
+      const errorMessage =
+        process.env['NODE_ENV'] === 'production'
+          ? (error as Error).message
+          : (error as Error).stack || (error as Error).message
+
+      console.error('Failed to defragment database:', errorMessage)
+      throw new Error(`Failed to defragment database: ${(error as Error).message}`)
     }
   }
 

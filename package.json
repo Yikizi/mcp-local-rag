@@ -1,6 +1,6 @@
 {
   "name": "@yikizi/mcp-local-rag",
-  "version": "1.5.1",
+  "version": "1.5.2",
   "description": "Local RAG MCP Server - Enhanced with hybrid search, memory management, and code file support (fork of shinpr/mcp-local-rag)",
   "main": "dist/index.js",
   "bin": {
